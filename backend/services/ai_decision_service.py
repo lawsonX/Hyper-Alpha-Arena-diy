@@ -1454,6 +1454,10 @@ def call_ai_for_decision(
             if not text_content and reasoning_text:
                 # Some providers keep reasoning separately even on normal completion
                 text_content = reasoning_text
+            elif not text_content and api_reasoning_content:
+                # Fallback: DeepSeek Reasoner may put JSON in reasoning_content
+                text_content = api_reasoning_content
+                logger.info("Using reasoning_content as fallback for empty content (DeepSeek Reasoner)")
 
             if not text_content:
                 logger.error(

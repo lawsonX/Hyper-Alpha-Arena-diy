@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/select'
 import { TradingAccount } from '@/lib/api'
 import PacmanLoader from '@/components/ui/pacman-loader'
+import { copyToClipboard } from '@/lib/utils'
 
 interface Message {
   id: number
@@ -482,11 +483,15 @@ export default function AiPromptChatModal({
               <div className="p-4 border-t flex justify-end gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
+                  onClick={async () => {
                     const currentPrompt = extractedPrompts[selectedPromptIndex]
                     if (currentPrompt) {
-                      navigator.clipboard.writeText(currentPrompt.content)
-                      toast.success('Prompt copied to clipboard')
+                      const success = await copyToClipboard(currentPrompt.content)
+                      if (success) {
+                        toast.success('Prompt copied to clipboard')
+                      } else {
+                        toast.error('Failed to copy to clipboard')
+                      }
                     }
                   }}
                 >

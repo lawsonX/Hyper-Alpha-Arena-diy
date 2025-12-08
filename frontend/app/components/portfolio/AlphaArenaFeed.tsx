@@ -20,6 +20,7 @@ import FlipNumber from './FlipNumber'
 import HighlightWrapper from './HighlightWrapper'
 import { formatDateTime } from '@/lib/dateTime'
 import { Loader2 } from 'lucide-react'
+import { copyToClipboard } from '@/lib/utils'
 
 interface AlphaArenaFeedProps {
   refreshKey?: number
@@ -561,14 +562,14 @@ export default function AlphaArenaFeed({
 
   const handleCopySection = async (entryId: number, section: 'prompt' | 'reasoning' | 'decision', content: string) => {
     const key = `${entryId}-${section}`
-    try {
-      await navigator.clipboard.writeText(content)
+    const success = await copyToClipboard(content)
+    if (success) {
       setCopiedSections((prev) => ({ ...prev, [key]: true }))
       setTimeout(() => {
         setCopiedSections((prev) => ({ ...prev, [key]: false }))
       }, 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
+    } else {
+      console.error('Failed to copy')
     }
   }
 

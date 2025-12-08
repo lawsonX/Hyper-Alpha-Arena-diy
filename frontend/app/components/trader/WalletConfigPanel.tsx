@@ -16,6 +16,7 @@ import {
   testWalletConnection,
   deleteAccountWallet,
 } from '@/lib/hyperliquidApi'
+import { copyToClipboard } from '@/lib/utils'
 
 interface WalletConfigPanelProps {
   accountId: number
@@ -265,9 +266,13 @@ export default function WalletConfigPanel({
                   {wallet.walletAddress}
                 </code>
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(wallet.walletAddress || '');
-                    toast.success('钱包地址已复制到剪贴板');
+                  onClick={async () => {
+                    const success = await copyToClipboard(wallet.walletAddress || '');
+                    if (success) {
+                      toast.success('钱包地址已复制到剪贴板');
+                    } else {
+                      toast.error('复制失败');
+                    }
                   }}
                   className="cursor-pointer"
                   title="复制钱包地址"

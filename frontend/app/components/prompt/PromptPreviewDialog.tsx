@@ -18,6 +18,7 @@ import {
 // Checkbox component replacement with native HTML
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { copyToClipboard } from '@/lib/utils'
 
 interface PromptPreviewDialogProps {
   open: boolean
@@ -112,16 +113,13 @@ export default function PromptPreviewDialog({
     }
   }
 
-  const handleCopyToClipboard = (text: string) => {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        toast.success('Copied to clipboard')
-      })
-      .catch((err) => {
-        console.error(err)
-        toast.error('Failed to copy to clipboard')
-      })
+  const handleCopyToClipboard = async (text: string) => {
+    const success = await copyToClipboard(text)
+    if (success) {
+      toast.success('Copied to clipboard')
+    } else {
+      toast.error('Failed to copy to clipboard')
+    }
   }
 
   return (

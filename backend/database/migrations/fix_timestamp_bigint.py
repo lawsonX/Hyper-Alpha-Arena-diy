@@ -10,6 +10,8 @@ Tables affected:
 - market_trades_aggregated
 - market_orderbook_snapshots
 - market_asset_metrics
+
+IDEMPOTENT: Safe to run multiple times. Checks column type before altering.
 """
 
 import sys
@@ -21,7 +23,7 @@ from connection import SessionLocal
 
 
 def upgrade():
-    """Apply the migration - alter timestamp columns to BIGINT"""
+    """Apply the migration - alter timestamp columns to BIGINT if needed"""
     print("Starting migration: fix_timestamp_bigint")
 
     db = SessionLocal()
@@ -34,12 +36,12 @@ def upgrade():
 
         for table in tables:
             # Check if table exists
-            result = db.execute(text(f"""
+            result = db.execute(text("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
-                    WHERE table_name = '{table}'
+                    WHERE table_name = :table_name
                 )
-            """))
+            """), {"table_name": table})
             exists = result.scalar()
 
             if not exists:
@@ -47,11 +49,15 @@ def upgrade():
                 continue
 
             # Check current column type
-            result = db.execute(text(f"""
+            result = db.execute(text("""
                 SELECT data_type FROM information_schema.columns
-                WHERE table_name = '{table}' AND column_name = 'timestamp'
-            """))
+                WHERE table_name = :table_name AND column_name = 'timestamp'
+            """), {"table_name": table})
             current_type = result.scalar()
+
+            if current_type is None:
+                print(f"Table {table} has no timestamp column, skipping...")
+                continue
 
             if current_type == 'bigint':
                 print(f"Table {table}.timestamp is already BIGINT, skipping...")
@@ -59,19 +65,16 @@ def upgrade():
 
             print(f"Altering {table}.timestamp from {current_type} to BIGINT...")
 
-            # Clear existing data (it's corrupted anyway due to overflow)
+            # Truncate table first (data is corrupted anyway due to overflow)
             db.execute(text(f"TRUNCATE TABLE {table}"))
 
             # Alter column type
-            db.execute(text(f"""
-                ALTER TABLE {table}
-                ALTER COLUMN timestamp TYPE BIGINT
-            """))
+            db.execute(text(f"ALTER TABLE {table} ALTER COLUMN timestamp TYPE BIGINT"))
 
             print(f"Successfully altered {table}.timestamp to BIGINT")
 
         db.commit()
-        print("Migration completed successfully!")
+        print("Migration fix_timestamp_bigint completed successfully!")
 
     except Exception as e:
         db.rollback()
@@ -82,9 +85,8 @@ def upgrade():
 
 
 def downgrade():
-    """Revert the migration - not recommended"""
+    """Revert the migration - not supported"""
     print("Downgrade not supported for this migration")
-    print("BIGINT to INTEGER conversion would cause data loss")
 
 
 if __name__ == "__main__":

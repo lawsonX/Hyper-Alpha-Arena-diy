@@ -21,6 +21,7 @@ MIGRATIONS = [
     "add_environment_to_crypto_klines.py",
     "add_prompt_template_fields.py",
     "add_ai_prompt_chat.py",
+    "fix_timestamp_bigint.py",
 ]
 
 def check_migration_table():

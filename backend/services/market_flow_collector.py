@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 # Aggregation window in seconds
 AGGREGATION_WINDOW_SECONDS = 15
 
+# Connection health check settings
+HEALTH_CHECK_INTERVAL_SECONDS = 30
+DATA_STALE_THRESHOLD_SECONDS = 30  # Consider data stale if no update for 30s
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_BASE_DELAY_SECONDS = 5
+
 
 @dataclass
 class TradeBuffer:
@@ -86,9 +92,22 @@ class MarketFlowCollector:
         self.latest_orderbook: Dict[str, Any] = {}
         self.latest_asset_ctx: Dict[str, Any] = {}
 
+        # Data freshness tracking (timestamp of last update for each data source)
+        self.last_update_time: Dict[str, float] = {
+            "l2book": 0.0,
+            "asset_ctx": 0.0,
+            "trades": 0.0,
+        }
+
         # Timing
         self.last_flush_time = time.time()
         self.flush_timer: Optional[threading.Timer] = None
+        self.health_check_timer: Optional[threading.Timer] = None
+
+        # Reconnection state
+        self.reconnect_attempts = 0
+        self.is_reconnecting = False
+        self.reconnect_lock = threading.Lock()
 
         # Thread safety
         self.buffer_lock = threading.Lock()
@@ -126,6 +145,9 @@ class MarketFlowCollector:
             # Start flush timer
             self._schedule_flush()
 
+            # Start health check timer
+            self._schedule_health_check()
+
             logger.info(f"MarketFlowCollector started with symbols: {symbols}")
 
         except Exception as e:
@@ -143,6 +165,11 @@ class MarketFlowCollector:
         if self.flush_timer:
             self.flush_timer.cancel()
             self.flush_timer = None
+
+        # Cancel health check timer
+        if self.health_check_timer:
+            self.health_check_timer.cancel()
+            self.health_check_timer = None
 
         # Flush remaining data
         self._flush_to_database()
@@ -249,6 +276,9 @@ class MarketFlowCollector:
             if not trades:
                 return
 
+            # Update freshness timestamp
+            self.last_update_time["trades"] = time.time()
+
             with self.buffer_lock:
                 buffer = self.trade_buffers.get(symbol)
                 if not buffer:
@@ -292,6 +322,8 @@ class MarketFlowCollector:
             data = msg.get("data", {})
             if data:
                 self.latest_orderbook[symbol] = data
+                # Update freshness timestamp
+                self.last_update_time["l2book"] = time.time()
 
         except Exception as e:
             logger.error(f"Error processing l2book for {symbol}: {e}")
@@ -306,9 +338,126 @@ class MarketFlowCollector:
             data = msg.get("data", {})
             if data:
                 self.latest_asset_ctx[symbol] = data
+                # Update freshness timestamp
+                self.last_update_time["asset_ctx"] = time.time()
 
         except Exception as e:
             logger.error(f"Error processing asset ctx for {symbol}: {e}")
+
+    def _schedule_health_check(self):
+        """Schedule next health check"""
+        if not self.running:
+            return
+        self.health_check_timer = threading.Timer(
+            HEALTH_CHECK_INTERVAL_SECONDS, self._health_check_and_reschedule
+        )
+        self.health_check_timer.daemon = True
+        self.health_check_timer.start()
+
+    def _health_check_and_reschedule(self):
+        """Check connection health and schedule next check"""
+        if not self.running:
+            return
+        self._check_connection_health()
+        self._schedule_health_check()
+
+    def _check_connection_health(self):
+        """Check if WebSocket data is stale and trigger reconnect if needed"""
+        if self.is_reconnecting:
+            logger.debug("Health check skipped - reconnection in progress")
+            return
+
+        now = time.time()
+        # Check l2book and asset_ctx freshness (these should update frequently)
+        l2book_age = now - self.last_update_time["l2book"] if self.last_update_time["l2book"] > 0 else -1
+        asset_ctx_age = now - self.last_update_time["asset_ctx"] if self.last_update_time["asset_ctx"] > 0 else -1
+        trades_age = now - self.last_update_time["trades"] if self.last_update_time["trades"] > 0 else -1
+
+        # Log current health status
+        logger.info(
+            f"[HealthCheck] Data freshness - l2book: {l2book_age:.0f}s, "
+            f"asset_ctx: {asset_ctx_age:.0f}s, trades: {trades_age:.0f}s "
+            f"(threshold: {DATA_STALE_THRESHOLD_SECONDS}s)"
+        )
+
+        # If both are stale, connection is likely dead
+        if (self.last_update_time["l2book"] > 0 and l2book_age > DATA_STALE_THRESHOLD_SECONDS and
+            self.last_update_time["asset_ctx"] > 0 and asset_ctx_age > DATA_STALE_THRESHOLD_SECONDS):
+            logger.warning(
+                f"[HealthCheck] STALE DATA DETECTED! WebSocket likely disconnected. "
+                f"l2book: {l2book_age:.0f}s ago, asset_ctx: {asset_ctx_age:.0f}s ago. "
+                f"Initiating reconnect..."
+            )
+            self._reconnect()
+
+    def _reconnect(self):
+        """Reconnect WebSocket with exponential backoff"""
+        with self.reconnect_lock:
+            if self.is_reconnecting:
+                logger.debug("[Reconnect] Already reconnecting, skipping")
+                return
+            self.is_reconnecting = True
+
+        try:
+            if self.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+                logger.error(
+                    f"[Reconnect] FAILED - Max attempts ({MAX_RECONNECT_ATTEMPTS}) reached. "
+                    f"Stopping collector. Manual restart required!"
+                )
+                self.stop()
+                return
+
+            self.reconnect_attempts += 1
+            delay = RECONNECT_BASE_DELAY_SECONDS * (2 ** (self.reconnect_attempts - 1))
+            logger.warning(
+                f"[Reconnect] Attempt {self.reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS} "
+                f"starting after {delay}s delay..."
+            )
+            time.sleep(delay)
+
+            # Save current symbols
+            symbols_to_restore = list(self.subscribed_symbols)
+            logger.info(f"[Reconnect] Will restore {len(symbols_to_restore)} symbols: {symbols_to_restore}")
+
+            # Disconnect old WebSocket
+            logger.info("[Reconnect] Disconnecting old WebSocket...")
+            if self.info and self.info.ws_manager:
+                try:
+                    self.info.disconnect_websocket()
+                    logger.info("[Reconnect] Old WebSocket disconnected")
+                except Exception as e:
+                    logger.warning(f"[Reconnect] Error disconnecting old websocket: {e}")
+
+            # Clear subscription state
+            self.subscribed_symbols = []
+            self.subscription_ids.clear()
+
+            # Create new Info client
+            logger.info("[Reconnect] Creating new Hyperliquid Info client...")
+            base_url = "https://api.hyperliquid.xyz"
+            self.info = Info(base_url=base_url, skip_ws=False)
+            logger.info("[Reconnect] New Info client created")
+
+            # Resubscribe to all symbols
+            logger.info(f"[Reconnect] Resubscribing to {len(symbols_to_restore)} symbols...")
+            for symbol in symbols_to_restore:
+                self._subscribe_symbol(symbol)
+
+            # Reset reconnect counter and update timestamps on success
+            self.reconnect_attempts = 0
+            now = time.time()
+            self.last_update_time["l2book"] = now
+            self.last_update_time["asset_ctx"] = now
+            self.last_update_time["trades"] = now
+            logger.warning(
+                f"[Reconnect] SUCCESS! Resubscribed to {len(symbols_to_restore)} symbols. "
+                f"Data collection resumed."
+            )
+
+        except Exception as e:
+            logger.error(f"Reconnect failed: {e}", exc_info=True)
+        finally:
+            self.is_reconnecting = False
 
     def _schedule_flush(self):
         """Schedule next flush"""
@@ -411,6 +560,12 @@ class MarketFlowCollector:
         """Flush orderbook snapshot for a symbol"""
         from database.models import MarketOrderbookSnapshots
 
+        # Skip if data is stale (WebSocket disconnected)
+        l2book_age = time.time() - self.last_update_time["l2book"]
+        if self.last_update_time["l2book"] > 0 and l2book_age > DATA_STALE_THRESHOLD_SECONDS:
+            logger.warning(f"[StaleData] Skipping orderbook flush for {symbol} - data is {l2book_age:.0f}s old")
+            return
+
         data = self.latest_orderbook.get(symbol)
         if not data:
             return
@@ -476,6 +631,12 @@ class MarketFlowCollector:
     def _flush_asset_metrics(self, db, symbol: str, timestamp_ms: int):
         """Flush asset metrics for a symbol"""
         from database.models import MarketAssetMetrics
+
+        # Skip if data is stale (WebSocket disconnected)
+        asset_ctx_age = time.time() - self.last_update_time["asset_ctx"]
+        if self.last_update_time["asset_ctx"] > 0 and asset_ctx_age > DATA_STALE_THRESHOLD_SECONDS:
+            logger.warning(f"[StaleData] Skipping asset metrics flush for {symbol} - data is {asset_ctx_age:.0f}s old")
+            return
 
         data = self.latest_asset_ctx.get(symbol)
         if not data:

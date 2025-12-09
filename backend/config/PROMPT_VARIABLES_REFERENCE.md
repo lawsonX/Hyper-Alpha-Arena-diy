@@ -133,6 +133,89 @@ To add BTC technical analysis to your prompt:
 
 ---
 
+## Market Flow Indicator Variables (Advanced)
+
+Market flow indicators provide insights into order flow, volume delta, and market microstructure.
+
+### Supported Flow Indicators
+
+| Indicator | Variable Example | Description |
+|-----------|------------------|-------------|
+| CVD | `{BTC_CVD_15m}` | Cumulative Volume Delta (Taker Buy - Sell) |
+| TAKER | `{BTC_TAKER_15m}` | Taker Buy/Sell Volume and Ratio |
+| OI | `{BTC_OI_15m}` | Open Interest (absolute value) |
+| OI_DELTA | `{BTC_OI_DELTA_15m}` | Open Interest Change % |
+| FUNDING | `{BTC_FUNDING_15m}` | Funding Rate (current and annualized) |
+| DEPTH | `{BTC_DEPTH_15m}` | Order Book Depth Ratio (Bid/Ask) |
+| IMBALANCE | `{BTC_IMBALANCE_15m}` | Order Book Imbalance (-1 to 1) |
+
+### Supported Periods
+
+`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`
+
+### Output Format Examples
+
+**CVD (Cumulative Volume Delta)**
+```
+CVD (15m): +$2.34M
+CVD last 5: -$0.50M, +$0.80M, +$1.20M, +$0.30M, +$0.54M
+Cumulative: +$8.70M
+```
+
+**TAKER (Taker Volume)**
+```
+Taker Buy: +$5.20M | Taker Sell: +$2.86M
+Buy/Sell Ratio: 1.82
+Ratio last 5: 0.95, 1.12, 1.45, 1.23, 1.82
+```
+
+**OI (Open Interest)**
+```
+Open Interest: +$150.00M
+OI last 5: +$148.50M, +$149.00M, +$149.30M, +$149.80M, +$150.00M
+```
+
+**OI_DELTA (Open Interest Change)**
+```
+OI Delta (15m): +1.20%
+OI Delta last 5: -0.30%, +0.50%, +0.80%, +0.10%, +1.20%
+```
+
+**FUNDING (Funding Rate)**
+```
+Funding Rate: 0.0125%
+Annualized: 45.63%
+Funding last 5: 0.0080%, 0.0100%, 0.0110%, 0.0120%, 0.0125%
+```
+
+**DEPTH (Order Book Depth)**
+```
+Bid Depth: +$10.50M | Ask Depth: +$8.20M
+Depth Ratio (Bid/Ask): 1.28
+Ratio last 5: 1.12, 1.18, 1.25, 1.30, 1.28
+Spread: 0.0100
+```
+
+**IMBALANCE (Order Book Imbalance)**
+```
+Order Imbalance: +0.125
+Imbalance last 5: +0.050, +0.080, +0.100, +0.130, +0.125
+```
+
+### Example Usage
+
+To add market flow analysis to your prompt:
+
+```
+=== MARKET FLOW ANALYSIS ===
+{BTC_CVD_15m}
+{BTC_TAKER_15m}
+{BTC_OI_1h}
+{BTC_FUNDING_1h}
+```
+
+---
+
 ## Legacy Variables (Backward Compatibility)
 
 | Variable | Description | Recommended Alternative |

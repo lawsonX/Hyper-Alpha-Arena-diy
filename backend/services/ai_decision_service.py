@@ -1765,12 +1765,14 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
     - {BTC_klines_15m}(200) - K-line data
     - {BTC_RSI14_15m} - Technical indicators
     - {BTC_market_data} - Market ticker data
+    - {BTC_CVD_15m} - Market flow indicators (CVD, TAKER, OI, FUNDING, DEPTH)
 
     Returns grouped by (symbol, period) for optimization:
     {
         ('BTC', '15m'): {
             'klines': {'count': 200},
             'indicators': ['RSI14', 'MACD'],
+            'flow_indicators': ['CVD', 'TAKER'],
             'market_data': True
         },
         ('BTC', None): {
@@ -1784,11 +1786,25 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
     # Pattern for indicator variables: {SYMBOL_INDICATOR_PERIOD}
     # Supports: RSI14, RSI7, MACD, STOCH, MA, EMA, BOLL, ATR14, VWAP, OBV
     indicator_pattern = r'\{([A-Z]+)_(RSI\d+|MACD|STOCH|MA\d*|EMA\d*|BOLL|ATR\d+|VWAP|OBV)_(\w+)\}'
-    
+
+    # Pattern for market flow variables: {SYMBOL_FLOW_PERIOD}
+    # Supports: CVD, TAKER, OI, OI_DELTA, FUNDING, DEPTH, IMBALANCE
+    # Note: OI_DELTA must come before OI in the pattern to match correctly
+    flow_pattern = r'\{([A-Z]+)_(CVD|TAKER|OI_DELTA|OI|FUNDING|DEPTH|IMBALANCE)_(\w+)\}'
+
     # Pattern for market data: {SYMBOL_market_data}
     market_data_pattern = r'\{([A-Z]+)_market_data\}'
 
     grouped = {}
+
+    def _ensure_key(key):
+        if key not in grouped:
+            grouped[key] = {
+                'klines': None,
+                'indicators': [],
+                'flow_indicators': [],
+                'market_data': False
+            }
 
     # Parse K-line variables
     for match in re.finditer(kline_pattern, template_text):
@@ -1797,8 +1813,7 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
         count = int(match.group(3)) if match.group(3) else 500  # Default 500
 
         key = (symbol, period)
-        if key not in grouped:
-            grouped[key] = {'klines': None, 'indicators': [], 'market_data': False}
+        _ensure_key(key)
         grouped[key]['klines'] = {'count': count}
 
         logger.debug(f"Found K-line variable: {symbol}_klines_{period}({count})")
@@ -1810,8 +1825,7 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
         period = match.group(3)
 
         key = (symbol, period)
-        if key not in grouped:
-            grouped[key] = {'klines': None, 'indicators': [], 'market_data': False}
+        _ensure_key(key)
 
         # Handle compound indicators (MA, EMA expand to multiple)
         if indicator == 'MA':
@@ -1822,23 +1836,35 @@ def _parse_kline_indicator_variables(template_text: str) -> Dict[str, Dict[str, 
             grouped[key]['indicators'].append(indicator)
 
         logger.debug(f"Found indicator variable: {symbol}_{indicator}_{period}")
+
+    # Parse market flow variables
+    for match in re.finditer(flow_pattern, template_text):
+        symbol = match.group(1)
+        flow_indicator = match.group(2)
+        period = match.group(3)
+
+        key = (symbol, period)
+        _ensure_key(key)
+        grouped[key]['flow_indicators'].append(flow_indicator)
+
+        logger.debug(f"Found flow indicator variable: {symbol}_{flow_indicator}_{period}")
     
     # Parse market data variables
     for match in re.finditer(market_data_pattern, template_text):
         symbol = match.group(1)
-        
+
         key = (symbol, None)
-        if key not in grouped:
-            grouped[key] = {'klines': None, 'indicators': [], 'market_data': False}
+        _ensure_key(key)
         grouped[key]['market_data'] = True
-        
+
         logger.debug(f"Found market data variable: {symbol}_market_data")
 
-    # Remove duplicates from indicators list
+    # Remove duplicates from indicators and flow_indicators lists
     for key in grouped:
         grouped[key]['indicators'] = list(set(grouped[key]['indicators']))
+        grouped[key]['flow_indicators'] = list(set(grouped[key]['flow_indicators']))
 
-    logger.info(f"Parsed {len(grouped)} groups of K-line/indicator/market-data variables")
+    logger.info(f"Parsed {len(grouped)} groups of K-line/indicator/flow/market-data variables")
     return grouped
 
 
@@ -2026,6 +2052,130 @@ def _format_single_indicator(indicator_name: str, indicator_data: Any) -> str:
         return "N/A"
 
 
+def _format_flow_indicator(indicator_name: str, indicator_data: Any) -> str:
+    """
+    Format a market flow indicator for prompt injection.
+
+    Args:
+        indicator_name: Name of the flow indicator (e.g., 'CVD', 'TAKER', 'OI')
+        indicator_data: Calculated flow indicator data dict
+
+    Returns:
+        Formatted string for prompt (objective data only, no interpretations)
+    """
+    if not indicator_data:
+        return "N/A"
+
+    try:
+        period = indicator_data.get("period", "")
+
+        if indicator_name == "CVD":
+            current = indicator_data.get("current", 0)
+            last_5 = indicator_data.get("last_5", [])
+            cumulative = indicator_data.get("cumulative", 0)
+
+            result = [
+                f"CVD ({period}): {_format_usd(current)}",
+                f"CVD last 5: {', '.join(_format_usd(v) for v in last_5)}",
+                f"Cumulative: {_format_usd(cumulative)}"
+            ]
+            return "\n".join(result)
+
+        elif indicator_name == "TAKER":
+            buy = indicator_data.get("buy", 0)
+            sell = indicator_data.get("sell", 0)
+            ratio = indicator_data.get("ratio", 1.0)
+            ratio_last_5 = indicator_data.get("ratio_last_5", [])
+
+            result = [
+                f"Taker Buy: {_format_usd(buy)} | Taker Sell: {_format_usd(sell)}",
+                f"Buy/Sell Ratio: {ratio:.2f}",
+                f"Ratio last 5: {', '.join(f'{r:.2f}' for r in ratio_last_5)}"
+            ]
+            return "\n".join(result)
+
+        elif indicator_name == "OI":
+            current = indicator_data.get("current", 0)
+            last_5 = indicator_data.get("last_5", [])
+
+            result = [
+                f"Open Interest: {_format_usd(current)}",
+                f"OI last 5: {', '.join(_format_usd(v) for v in last_5)}"
+            ]
+            return "\n".join(result)
+
+        elif indicator_name == "OI_DELTA":
+            current = indicator_data.get("current", 0)
+            last_5 = indicator_data.get("last_5", [])
+
+            result = [
+                f"OI Delta ({period}): {current:+.2f}%",
+                f"OI Delta last 5: {', '.join(f'{c:+.2f}%' for c in last_5)}"
+            ]
+            return "\n".join(result)
+
+        elif indicator_name == "FUNDING":
+            current = indicator_data.get("current", 0)
+            last_5 = indicator_data.get("last_5", [])
+            annualized = indicator_data.get("annualized", 0)
+
+            result = [
+                f"Funding Rate: {current:.4f}%",
+                f"Annualized: {annualized:.2f}%",
+                f"Funding last 5: {', '.join(f'{f:.4f}%' for f in last_5)}"
+            ]
+            return "\n".join(result)
+
+        elif indicator_name == "DEPTH":
+            bid = indicator_data.get("bid", 0)
+            ask = indicator_data.get("ask", 0)
+            ratio = indicator_data.get("ratio", 1.0)
+            ratio_last_5 = indicator_data.get("ratio_last_5", [])
+            spread = indicator_data.get("spread")
+
+            result = [
+                f"Bid Depth: {_format_usd(bid)} | Ask Depth: {_format_usd(ask)}",
+                f"Depth Ratio (Bid/Ask): {ratio:.2f}",
+                f"Ratio last 5: {', '.join(f'{r:.2f}' for r in ratio_last_5)}"
+            ]
+            if spread is not None:
+                result.append(f"Spread: {spread:.4f}")
+            return "\n".join(result)
+
+        elif indicator_name == "IMBALANCE":
+            current = indicator_data.get("current", 0)
+            last_5 = indicator_data.get("last_5", [])
+
+            result = [
+                f"Order Imbalance: {current:+.3f}",
+                f"Imbalance last 5: {', '.join(f'{v:+.3f}' for v in last_5)}"
+            ]
+            return "\n".join(result)
+
+        else:
+            return "N/A"
+
+    except Exception as e:
+        logger.error(f"Error formatting flow indicator {indicator_name}: {e}")
+        return "N/A"
+
+
+def _format_usd(value: float) -> str:
+    """Format USD value with appropriate unit (K, M, B)"""
+    if value is None:
+        return "N/A"
+    abs_val = abs(value)
+    sign = "+" if value >= 0 else "-"
+    if abs_val >= 1_000_000_000:
+        return f"{sign}${abs_val/1_000_000_000:.2f}B"
+    elif abs_val >= 1_000_000:
+        return f"{sign}${abs_val/1_000_000:.2f}M"
+    elif abs_val >= 1_000:
+        return f"{sign}${abs_val/1_000:.2f}K"
+    else:
+        return f"{sign}${abs_val:.2f}"
+
+
 def _build_klines_and_indicators_context(
     variable_groups: Dict[str, Dict[str, Any]],
     db: Session,
@@ -2147,6 +2297,27 @@ def _build_klines_and_indicators_context(
                     compound_var = f"{symbol}_EMA_{period}"
                     context[compound_var] = "\n".join(ema_lines).strip()
                     logger.debug(f"Added compound EMA variable: {compound_var}")
+
+            # Process market flow indicators
+            if requirements.get('flow_indicators'):
+                from services.market_flow_indicators import get_flow_indicators_for_prompt
+
+                flow_indicators_to_calc = requirements['flow_indicators']
+                flow_data = get_flow_indicators_for_prompt(
+                    db=db,
+                    symbol=symbol,
+                    period=period,
+                    indicators=flow_indicators_to_calc
+                )
+
+                for flow_name in flow_indicators_to_calc:
+                    flow_indicator_data = flow_data.get(flow_name)
+                    formatted = _format_flow_indicator(flow_name, flow_indicator_data)
+
+                    # Variable name: {BTC_CVD_15m}
+                    var_name = f"{symbol}_{flow_name}_{period}"
+                    context[var_name] = formatted
+                    logger.debug(f"Added flow indicator variable: {var_name}")
 
         except Exception as e:
             logger.error(f"Error processing {symbol} {period}: {e}", exc_info=True)

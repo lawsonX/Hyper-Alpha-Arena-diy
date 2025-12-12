@@ -50,14 +50,15 @@ def list_signals(db: Session = Depends(get_db)) -> SignalListResponse:
         ))
 
     pools_result = db.execute(text("""
-        SELECT id, pool_name, signal_ids, symbols, enabled, created_at
+        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic
         FROM signal_pools ORDER BY id
     """))
     pools = []
     for row in pools_result:
         pools.append(SignalPoolResponse(
             id=row[0], pool_name=row[1], signal_ids=row[2] or [],
-            symbols=row[3] or [], enabled=row[4], created_at=row[5]
+            symbols=row[3] or [], enabled=row[4], created_at=row[5],
+            logic=row[6] or "OR"
         ))
 
     return SignalListResponse(signals=signals, pools=pools)
@@ -157,20 +158,22 @@ def create_pool(payload: SignalPoolCreate, db: Session = Depends(get_db)):
     """Create a new signal pool"""
     import json
     result = db.execute(text("""
-        INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled)
-        VALUES (:name, :signal_ids, :symbols, :enabled)
-        RETURNING id, pool_name, signal_ids, symbols, enabled, created_at
+        INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled, logic)
+        VALUES (:name, :signal_ids, :symbols, :enabled, :logic)
+        RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic
     """), {
         "name": payload.pool_name,
         "signal_ids": json.dumps(payload.signal_ids),
         "symbols": json.dumps(payload.symbols),
-        "enabled": payload.enabled
+        "enabled": payload.enabled,
+        "logic": payload.logic
     })
     db.commit()
     row = result.fetchone()
     return SignalPoolResponse(
         id=row[0], pool_name=row[1], signal_ids=row[2] or [],
-        symbols=row[3] or [], enabled=row[4], created_at=row[5]
+        symbols=row[3] or [], enabled=row[4], created_at=row[5],
+        logic=row[6] or "OR"
     )
 
 
@@ -178,7 +181,7 @@ def create_pool(payload: SignalPoolCreate, db: Session = Depends(get_db)):
 def get_pool(pool_id: int, db: Session = Depends(get_db)):
     """Get a signal pool by ID"""
     result = db.execute(text("""
-        SELECT id, pool_name, signal_ids, symbols, enabled, created_at
+        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic
         FROM signal_pools WHERE id = :id
     """), {"id": pool_id})
     row = result.fetchone()
@@ -186,7 +189,8 @@ def get_pool(pool_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Pool not found")
     return SignalPoolResponse(
         id=row[0], pool_name=row[1], signal_ids=row[2] or [],
-        symbols=row[3] or [], enabled=row[4], created_at=row[5]
+        symbols=row[3] or [], enabled=row[4], created_at=row[5],
+        logic=row[6] or "OR"
     )
 
 
@@ -208,11 +212,14 @@ def update_pool(pool_id: int, payload: SignalPoolUpdate, db: Session = Depends(g
     if payload.enabled is not None:
         updates.append("enabled = :enabled")
         params["enabled"] = payload.enabled
+    if payload.logic is not None:
+        updates.append("logic = :logic")
+        params["logic"] = payload.logic
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    query = f"UPDATE signal_pools SET {', '.join(updates)} WHERE id = :id RETURNING *"
+    query = f"UPDATE signal_pools SET {', '.join(updates)} WHERE id = :id RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic"
     result = db.execute(text(query), params)
     db.commit()
     row = result.fetchone()
@@ -220,7 +227,8 @@ def update_pool(pool_id: int, payload: SignalPoolUpdate, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Pool not found")
     return SignalPoolResponse(
         id=row[0], pool_name=row[1], signal_ids=row[2] or [],
-        symbols=row[3] or [], enabled=row[4], created_at=row[5]
+        symbols=row[3] or [], enabled=row[4], created_at=row[5],
+        logic=row[6] or "OR"
     )
 
 
@@ -232,6 +240,47 @@ def delete_pool(pool_id: int, db: Session = Depends(get_db)):
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Pool not found")
     return {"message": "Pool deleted successfully"}
+
+
+# ============ Metric Analysis ============
+
+@router.get("/analyze")
+def analyze_metric(
+    symbol: str = Query(..., description="Trading symbol (e.g., BTC)"),
+    metric: str = Query(..., description="Metric type (e.g., oi_delta_percent)"),
+    period: str = Query("5m", description="Time period (e.g., 5m, 15m)"),
+    days: int = Query(7, le=30, description="Days of history to analyze"),
+    db: Session = Depends(get_db)
+):
+    """
+    Analyze a metric and provide statistical summary with threshold suggestions.
+
+    Returns statistics and suggested thresholds based on historical data.
+    """
+    from services.signal_analysis_service import signal_analysis_service
+
+    result = signal_analysis_service.analyze_metric(db, symbol, metric, period, days)
+    return result
+
+
+# ============ Signal Backtest Preview ============
+
+@router.get("/backtest/{signal_id}")
+def backtest_signal(
+    signal_id: int,
+    symbol: str = Query(..., description="Trading symbol (e.g., BTC)"),
+    kline_min_ts: int = Query(None, description="Min K-line timestamp in ms (for filtering triggers)"),
+    kline_max_ts: int = Query(None, description="Max K-line timestamp in ms (for filtering triggers)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Backtest a signal against historical data.
+    Returns only trigger points - K-lines should be fetched via /api/market/kline-with-indicators.
+    """
+    from services.signal_backtest_service import signal_backtest_service
+
+    result = signal_backtest_service.backtest_signal(db, signal_id, symbol, kline_min_ts, kline_max_ts)
+    return result
 
 
 # ============ Trigger Logs ============
@@ -372,9 +421,10 @@ def get_signal_states():
 @router.post("/states/reset")
 def reset_signal_states(
     signal_id: Optional[int] = Query(None),
+    pool_id: Optional[int] = Query(None),
     symbol: Optional[str] = Query(None)
 ):
-    """Reset signal states (useful for testing)"""
+    """Reset signal and pool states (useful for testing)"""
     from services.signal_detection_service import signal_detection_service
-    signal_detection_service.reset_state(signal_id, symbol)
-    return {"message": "Signal states reset successfully"}
+    signal_detection_service.reset_state(signal_id, pool_id, symbol)
+    return {"message": "Signal and pool states reset successfully"}

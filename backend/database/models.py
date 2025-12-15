@@ -757,6 +757,63 @@ class MarketAssetMetrics(Base):
 
 
 # ============================================================================
+# Signal System Tables (for signal-based trading triggers)
+# ============================================================================
+
+class SignalDefinition(Base):
+    """Signal definitions for market condition triggers"""
+    __tablename__ = "signal_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    signal_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    trigger_condition = Column(Text, nullable=False)  # JSONB stored as text
+    enabled = Column(String(10), nullable=True, default="true")
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(),
+                        onupdate=func.current_timestamp())
+
+
+class SignalPool(Base):
+    """Signal pools for grouping multiple signals"""
+    __tablename__ = "signal_pools"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pool_name = Column(String(100), nullable=False)
+    signal_ids = Column(Text, nullable=False, default="[]")  # JSONB stored as text
+    symbols = Column(Text, nullable=False, default="[]")  # JSONB stored as text
+    logic = Column(String(10), nullable=True, default="OR")  # AND/OR logic
+    enabled = Column(String(10), nullable=True, default="true")
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+
+class SignalTriggerLog(Base):
+    """Logs of signal triggers for audit and analysis"""
+    __tablename__ = "signal_trigger_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    signal_id = Column(Integer, nullable=True)
+    pool_id = Column(Integer, nullable=True)
+    symbol = Column(String(20), nullable=False)
+    trigger_value = Column(Text, nullable=True)  # JSONB stored as text
+    triggered_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+
+
+class TraderTriggerConfig(Base):
+    """Configuration for trader trigger settings"""
+    __tablename__ = "trader_trigger_config"
+
+    trader_id = Column(String(36), primary_key=True)  # UUID as string
+    scheduled_enabled = Column(String(10), nullable=True, default="true")
+    scheduled_interval = Column(Integer, nullable=True, default=30)
+    signal_pool_id = Column(Integer, nullable=True)
+    last_trigger_time = Column(TIMESTAMP, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(),
+                        onupdate=func.current_timestamp())
+
+
+# ============================================================================
 # CRYPTO market trading configuration constants
 # ============================================================================
 CRYPTO_MIN_COMMISSION = 0.1  # $0.1 minimum commission

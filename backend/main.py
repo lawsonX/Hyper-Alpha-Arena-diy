@@ -181,6 +181,14 @@ def on_startup():
 
     # Create tables
     Base.metadata.create_all(bind=engine)
+
+    # Run schema validator to auto-fix missing columns
+    try:
+        from database.schema_validator import validate_and_sync_schema
+        validate_and_sync_schema()
+    except Exception as e:
+        print(f"[startup] Schema validation error (non-fatal): {e}")
+
     # Seed trading configs if empty
     db: Session = SessionLocal()
     try:

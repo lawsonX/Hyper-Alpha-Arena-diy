@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 Database Migration Manager
-Automatically runs pending migrations during application startup
+
+Runs all migrations on every startup, relying on idempotency.
+Each migration script must check if changes are needed before applying.
+
+Architecture:
+- No migration records - we don't track "what ran", only "what's correct"
+- Idempotency is the core guarantee - scripts check before executing
+- schema_validator provides final fallback after migrations
 """
 import os
 import sys
@@ -11,12 +18,10 @@ from pathlib import Path
 # Add backend to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import text
-from connection import SessionLocal
-
 logger = logging.getLogger(__name__)
 
 # List of migration scripts in execution order
+# Each script MUST have idempotency checks (check if column/table exists before adding)
 MIGRATIONS = [
     "add_environment_to_crypto_klines.py",
     "add_prompt_template_fields.py",
@@ -30,59 +35,12 @@ MIGRATIONS = [
     "add_logic_to_signal_pools.py",
 ]
 
-def check_migration_table():
-    """Create migrations tracking table if it doesn't exist"""
-    db = SessionLocal()
-    try:
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                id SERIAL PRIMARY KEY,
-                migration_name VARCHAR(255) UNIQUE NOT NULL,
-                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-        db.commit()
-        logger.info("Migration tracking table ready")
-    except Exception as e:
-        logger.error(f"Failed to create migration table: {e}")
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
-def is_migration_executed(migration_name: str) -> bool:
-    """Check if a migration has already been executed"""
-    db = SessionLocal()
-    try:
-        result = db.execute(text(
-            "SELECT COUNT(*) FROM schema_migrations WHERE migration_name = :name"
-        ), {"name": migration_name})
-        count = result.scalar()
-        return count > 0
-    except Exception as e:
-        logger.error(f"Failed to check migration status: {e}")
-        return False
-    finally:
-        db.close()
-
-def mark_migration_executed(migration_name: str):
-    """Mark a migration as executed"""
-    db = SessionLocal()
-    try:
-        db.execute(text(
-            "INSERT INTO schema_migrations (migration_name) VALUES (:name)"
-        ), {"name": migration_name})
-        db.commit()
-        logger.info(f"Marked migration {migration_name} as executed")
-    except Exception as e:
-        logger.error(f"Failed to mark migration as executed: {e}")
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-def run_migration(migration_file: str):
-    """Execute a single migration script"""
+def run_migration(migration_file: str) -> bool:
+    """
+    Execute a single migration script.
+    Returns True if successful (or already applied), False if failed.
+    """
     migrations_dir = Path(__file__).parent / "migrations"
     migration_path = migrations_dir / migration_file
 
@@ -91,94 +49,60 @@ def run_migration(migration_file: str):
         return False
 
     try:
-        # Import and execute the migration
         spec = __import__(f"database.migrations.{migration_file[:-3]}", fromlist=["upgrade"])
         if hasattr(spec, 'upgrade'):
-            logger.info(f"Executing migration: {migration_file}")
+            logger.debug(f"Running migration: {migration_file}")
             spec.upgrade()
-            mark_migration_executed(migration_file)
             return True
         else:
             logger.error(f"Migration {migration_file} missing upgrade function")
             return False
     except Exception as e:
-        logger.error(f"Migration {migration_file} failed: {e}")
-        logger.warning(f"Continuing with remaining migrations despite error in {migration_file}")
-        # DO NOT mark failed migrations as executed - they need to be retried
+        # Log error but don't fail - migration may have already been applied
+        # or schema_validator will fix it later
+        logger.warning(f"Migration {migration_file} error (may be already applied): {e}")
         return False
 
-def ensure_critical_columns():
+
+def run_all_migrations() -> bool:
     """
-    Directly check and add missing critical columns.
-    This runs before migration checks to fix any database schema issues.
+    Run all migrations on every startup.
+    Relies on idempotency - each script checks if changes are needed.
+
+    NEVER blocks startup - all errors are logged but execution continues.
     """
-    db = SessionLocal()
-    try:
-        # Check if signal_pools table exists first
-        result = db.execute(text("""
-            SELECT table_name FROM information_schema.tables
-            WHERE table_name = 'signal_pools'
-        """))
-        if not result.fetchone():
-            return  # Table doesn't exist yet, migrations will create it
+    logger.info("Running all migrations (idempotency-based)...")
 
-        # Check if logic column exists
-        result = db.execute(text("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name = 'signal_pools' AND column_name = 'logic'
-        """))
-        if not result.fetchone():
-            # Directly add the missing column
-            db.execute(text("""
-                ALTER TABLE signal_pools
-                ADD COLUMN logic VARCHAR(10) DEFAULT 'AND'
-            """))
-            db.commit()
-            logger.info("Auto-fix: Added missing 'logic' column to signal_pools")
-    except Exception as e:
-        logger.debug(f"Schema check skipped: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    success_count = 0
+    skip_count = 0
+    error_count = 0
 
-
-def run_pending_migrations():
-    """Run all pending migrations"""
-    logger.info("Checking for pending migrations...")
-
-    try:
-        check_migration_table()
-        ensure_critical_columns()
-
-        executed_count = 0
-        failed_count = 0
-        for migration in MIGRATIONS:
-            if not is_migration_executed(migration):
-                logger.info(f"Running pending migration: {migration}")
-                if run_migration(migration):
-                    executed_count += 1
-                else:
-                    failed_count += 1
-                    logger.warning(f"Migration {migration} failed, but continuing with remaining migrations")
+    for migration in MIGRATIONS:
+        try:
+            if run_migration(migration):
+                success_count += 1
             else:
-                logger.debug(f"Migration {migration} already executed, skipping")
+                error_count += 1
+        except Exception as e:
+            logger.error(f"Unexpected error in {migration}: {e}")
+            error_count += 1
 
-        if executed_count > 0:
-            logger.info(f"Successfully executed {executed_count} migrations")
-        if failed_count > 0:
-            logger.warning(f"{failed_count} migrations failed (may be already applied)")
-        if executed_count == 0 and failed_count == 0:
-            logger.info("No pending migrations")
+    # Log summary
+    if error_count > 0:
+        logger.warning(f"Migrations: {success_count} ok, {error_count} errors (may be already applied)")
+    else:
+        logger.info(f"Migrations: {success_count} completed successfully")
 
-        # Return True to allow application to start even if some migrations failed
-        # (they may have failed because they were already applied)
-        return True
+    # Always return True - never block startup
+    # schema_validator will catch any remaining issues
+    return True
 
-    except Exception as e:
-        logger.error(f"Migration process failed: {e}")
-        return False
+
+# Backward compatibility alias
+run_pending_migrations = run_all_migrations
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    success = run_pending_migrations()
+    success = run_all_migrations()
     sys.exit(0 if success else 1)

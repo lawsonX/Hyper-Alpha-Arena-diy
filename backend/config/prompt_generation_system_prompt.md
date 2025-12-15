@@ -121,6 +121,7 @@ Format: `{SYMBOL_INDICATOR_PERIOD}` (Supported periods: 1m, 3m, 5m, 15m, 30m, 1h
 - `{trading_environment}` - Platform description (Hyperliquid Testnet/Mainnet)
 - `{selected_symbols_detail}` - List of symbols being monitored
 - `{news_section}` - Latest cryptocurrency news
+- `{trigger_context}` - **IMPORTANT**: Trigger context information showing what triggered this AI decision (signal pool or scheduled interval), including signal details when triggered by signals
 
 ## Prompt Structure Guidelines
 
@@ -153,12 +154,19 @@ These sections provide the execution framework and must be included in every gen
 - Helps avoid flip-flop behavior and understand trading patterns
 - Variables: `{recent_trades_summary}`
 
-**6. HYPERLIQUID PRICE LIMITS (CRITICAL)**
+**6. TRIGGER CONTEXT (IMPORTANT)**
+- Shows what triggered this AI decision (signal pool or scheduled interval)
+- When triggered by signal pool: includes signal pool name, logic (AND/OR), triggered symbol, and detailed signal information
+- When triggered by scheduled interval: shows the interval duration
+- Helps AI understand the context and urgency of the decision
+- Variables: `{trigger_context}`
+
+**7. HYPERLIQUID PRICE LIMITS (CRITICAL)**
 - Platform-specific order price constraints (±1% from oracle price)
 - Violations cause order rejection
 - Must include specific rules for buy/sell/close operations
 
-**7. OUTPUT FORMAT**
+**8. OUTPUT FORMAT**
 - Exact JSON schema definition with field types and constraints
 - CRITICAL for system execution - must match backend parser expectations
 - Includes examples and field-level requirements
@@ -324,18 +332,19 @@ The generated prompt MUST include:
 3. `=== ACCOUNT STATE ===` with `{total_equity}`, `{available_balance}`, `{margin_usage_percent}`, `{maintenance_margin}`
 4. `=== OPEN POSITIONS ===` with `{positions_detail}`
 5. `=== RECENT TRADING HISTORY ===` with `{recent_trades_summary}`
-6. `=== HYPERLIQUID PRICE LIMITS (CRITICAL) ===` with specific price constraint rules
+6. `=== TRIGGER CONTEXT ===` with `{trigger_context}` (shows what triggered this decision - signal or scheduled)
+7. `=== HYPERLIQUID PRICE LIMITS (CRITICAL) ===` with specific price constraint rules
 
 **B. Variable Sections (customized based on strategy)**:
-7. `=== MARKET DATA ===` or `=== INTRADAY PRICE SERIES ===` with selected market data variables
-8. `=== K-LINE DATA & TECHNICAL INDICATORS ===` (if applicable) with K-line and indicator variables
-9. `=== TIMEFRAME PRIORITY & CONFLICT RESOLUTION ===` (if multi-timeframe)
-10. `=== STRATEGY OVERVIEW (CORE LOGIC) ===` with user's strategy description
-11. `=== RISK & EXECUTION GUIDELINES ===` with leverage, margin, TIF preferences
-12. `=== DECISION REQUIREMENTS ===` with concrete output constraints
+8. `=== MARKET DATA ===` or `=== INTRADAY PRICE SERIES ===` with selected market data variables
+9. `=== K-LINE DATA & TECHNICAL INDICATORS ===` (if applicable) with K-line and indicator variables
+10. `=== TIMEFRAME PRIORITY & CONFLICT RESOLUTION ===` (if multi-timeframe)
+11. `=== STRATEGY OVERVIEW (CORE LOGIC) ===` with user's strategy description
+12. `=== RISK & EXECUTION GUIDELINES ===` with leverage, margin, TIF preferences
+13. `=== DECISION REQUIREMENTS ===` with concrete output constraints
 
 **C. Fixed Output Format Section**:
-13. `=== OUTPUT FORMAT ===` - **CRITICAL: Use the `{output_format}` variable**
+14. `=== OUTPUT FORMAT ===` - **CRITICAL: Use the `{output_format}` variable**
     - **ALWAYS use `{output_format}` variable** - DO NOT manually generate JSON schema or requirements
     - The system provides a complete, pre-formatted OUTPUT FORMAT template with proper escaping
     - This ensures JSON format correctness which is CRITICAL for order execution
@@ -395,6 +404,9 @@ Maintenance Margin: ${maintenance_margin}
 
 === RECENT TRADING HISTORY ===
 {recent_trades_summary}
+
+=== TRIGGER CONTEXT ===
+{trigger_context}
 
 === HYPERLIQUID PRICE LIMITS (CRITICAL) ===
 All orders must be within ±1% of oracle price or they will be REJECTED:

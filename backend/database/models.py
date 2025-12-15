@@ -270,8 +270,11 @@ class AccountStrategyConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, unique=True)
-    price_threshold = Column(Float, nullable=False, default=1.0)  # Price change threshold (%)
+    price_threshold = Column(Float, nullable=False, default=1.0)  # Deprecated, kept for compatibility
     trigger_interval = Column(Integer, nullable=False, default=150)  # Trigger interval (seconds)
+    # Note: Foreign key constraint exists at DB level (via migration), but not in ORM
+    # because signal_pools table is managed via raw SQL, not SQLAlchemy models
+    signal_pool_id = Column(Integer, nullable=True)
     enabled = Column(String(10), nullable=False, default="true")
     last_trigger_at = Column(TIMESTAMP, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())

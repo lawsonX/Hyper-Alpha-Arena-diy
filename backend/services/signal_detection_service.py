@@ -66,7 +66,25 @@ class SignalDetectionService:
         self._cache_time: float = 0
         self._cache_ttl: float = 60  # Refresh cache every 60 seconds
 
+        # Callbacks for signal triggers (used by trading_strategy.py)
+        self._trigger_callbacks: List[callable] = []
+
         logger.info("SignalDetectionService initialized")
+
+    def subscribe_signal_triggers(self, callback: callable) -> None:
+        """Register a callback to be called when a signal pool triggers.
+
+        Callback signature: callback(symbol: str, pool: dict, market_data: dict, triggered_signals: list)
+        """
+        if callback not in self._trigger_callbacks:
+            self._trigger_callbacks.append(callback)
+            logger.info(f"Signal trigger callback registered: {callback.__name__ if hasattr(callback, '__name__') else callback}")
+
+    def unsubscribe_signal_triggers(self, callback: callable) -> None:
+        """Unregister a signal trigger callback."""
+        if callback in self._trigger_callbacks:
+            self._trigger_callbacks.remove(callback)
+            logger.info(f"Signal trigger callback unregistered: {callback.__name__ if hasattr(callback, '__name__') else callback}")
 
     def detect_signals(self, symbol: str, market_data: Dict[str, Any]) -> List[dict]:
         """
@@ -97,11 +115,33 @@ class SignalDetectionService:
                 pool_trigger = self._check_pool_trigger(pool, symbol, market_data)
                 if pool_trigger:
                     triggered_pools.append(pool_trigger)
+                    # Notify all registered callbacks
+                    self._notify_callbacks(symbol, pool_trigger, market_data)
 
         except Exception as e:
             logger.error(f"Error detecting signals for {symbol}: {e}", exc_info=True)
 
         return triggered_pools
+
+    def _notify_callbacks(self, symbol: str, pool_trigger: dict, market_data: Dict[str, Any]) -> None:
+        """Notify all registered callbacks about a signal pool trigger."""
+        pool_name = pool_trigger.get("pool_name", "Unknown")
+        print(f"[SignalDetection] _notify_callbacks called for pool {pool_name}, callbacks count: {len(self._trigger_callbacks)}")
+
+        if not self._trigger_callbacks:
+            print("[SignalDetection] No callbacks registered, skipping notification!")
+            return
+
+        # Note: trigger_result uses "signals_triggered" key
+        triggered_signals = pool_trigger.get("signals_triggered", [])
+        for callback in self._trigger_callbacks:
+            try:
+                print(f"[SignalDetection] Calling callback: {callback}")
+                callback(symbol, pool_trigger, market_data, triggered_signals)
+                print(f"[SignalDetection] Callback completed successfully")
+            except Exception as e:
+                print(f"[SignalDetection] Error in callback: {e}")
+                logger.error(f"Error in signal trigger callback: {e}", exc_info=True)
 
     def _refresh_cache_if_needed(self):
         """Refresh signal pools and signals cache if TTL expired"""
@@ -270,11 +310,13 @@ class SignalDetectionService:
         return {
             "signal_id": signal_id,
             "signal_name": signal_def.get("signal_name"),
+            "description": signal_def.get("description"),
             "metric": metric,
             "operator": operator,
             "threshold": threshold,
             "current_value": current_value,
             "condition_met": condition_met,
+            "time_window": time_window,
         }
 
     def _check_signal_trigger(

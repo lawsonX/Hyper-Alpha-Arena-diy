@@ -18,6 +18,18 @@ Total Account Value: ${total_account_value}
 === NEWS ===
 {news_section}
 
+=== TRIGGER CONTEXT ===
+{trigger_context}
+
+This section explains **why you are activated now**:
+**Signal-triggered**: A predefined condition was met (e.g., OI surge, funding spike, price breakout).
+→ Focus on validating the triggered signal's market context before acting.
+
+**Scheduled**: A routine checkpoint for market re-evaluation.
+→ Perform a comprehensive scan across all monitored symbols.
+
+**Important**: The trigger is NOT a trade instruction. It prompts you to reassess the market using your full strategy rules. A valid trigger may still result in "hold" if other conditions are not met.
+
 === TRADING RULES ===
 - operation: "buy" (long), "sell" (short), "hold", or "close"
 - target_portion_of_balance: 0.0-1.0 (portion of balance to use)
@@ -56,6 +68,18 @@ Account Value: ${total_account_value}
 
 === NEWS ===
 {news_section}
+
+=== TRIGGER CONTEXT ===
+{trigger_context}
+
+This section explains **why you are activated now**:
+**Signal-triggered**: A predefined condition was met (e.g., OI surge, funding spike, price breakout).
+→ Focus on validating the triggered signal's market context before acting.
+
+**Scheduled**: A routine checkpoint for market re-evaluation.
+→ Perform a comprehensive scan across all monitored symbols.
+
+**Important**: The trigger is NOT a trade instruction. It prompts you to reassess the market using your full strategy rules. A valid trigger may still result in "hold" if other conditions are not met.
 
 === TECHNICAL ANALYSIS (Optional) ===
 You can add K-line and indicator variables to this section.
@@ -195,6 +219,18 @@ Monitoring {selected_symbols_count} contracts:
 
 === NEWS ===
 {news_section}
+
+=== TRIGGER CONTEXT ===
+{trigger_context}
+
+This section explains **why you are activated now**:
+**Signal-triggered**: A predefined condition was met (e.g., OI surge, funding spike, price breakout).
+→ Focus on validating the triggered signal's market context before acting.
+
+**Scheduled**: A routine checkpoint for market re-evaluation.
+→ Perform a comprehensive scan across all monitored symbols.
+
+**Important**: The trigger is NOT a trade instruction. It prompts you to reassess the market using your full strategy rules. A valid trigger may still result in "hold" if other conditions are not met.
 
 === TECHNICAL ANALYSIS (Optional) ===
 Add K-line and indicator variables here if needed.

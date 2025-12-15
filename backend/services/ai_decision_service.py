@@ -64,6 +64,28 @@ def _format_quantity(value: Optional[float], precision: int = 6, default: str = 
         return default
 
 
+def _get_metric_unit(metric: str) -> str:
+    """Get the unit for a signal metric type."""
+    # Percentage-based metrics
+    percent_metrics = {
+        "oi_delta", "price_change_percent", "volume_change_percent",
+        "funding", "funding_rate", "taker_ratio"
+    }
+    # Ratio-based metrics (no unit, just a number)
+    ratio_metrics = {"depth_ratio", "order_imbalance", "imbalance"}
+    # USD-based metrics
+    usd_metrics = {"oi", "cvd", "volume", "taker_volume"}
+
+    metric_lower = metric.lower() if metric else ""
+    if metric_lower in percent_metrics or "percent" in metric_lower:
+        return "%"
+    elif metric_lower in usd_metrics:
+        return ""  # USD values are typically formatted separately
+    elif metric_lower in ratio_metrics:
+        return ""  # Ratios are dimensionless
+    return ""
+
+
 def _build_session_context(account: Account) -> str:
     """Build session context (legacy format for backward compatibility)"""
     now = datetime.utcnow()
@@ -455,6 +477,7 @@ def _build_prompt_context(
     sampling_interval: Optional[int] = None,
     environment: str = "mainnet",
     template_text: Optional[str] = None,
+    trigger_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build complete prompt context for AI decision-making.
@@ -480,6 +503,7 @@ def _build_prompt_context(
         sampling_interval: Sampling interval in seconds
         environment: Trading environment (mainnet/testnet)
         template_text: Prompt template text for parsing K-line variables
+        trigger_context: Context about what triggered this decision (signal or scheduled)
 
     Returns:
         Complete context dictionary ready for template.format_map()
@@ -832,6 +856,57 @@ def _build_prompt_context(
         except Exception as e:
             logger.warning(f"Failed to build K-line context: {e}", exc_info=True)
 
+    # ============================================================================
+    # TRIGGER CONTEXT FORMATTING
+    # ============================================================================
+    # Format trigger context into structured text for AI prompt.
+    # This tells the AI what triggered this decision (signal or scheduled).
+    trigger_context_text = ""
+    if trigger_context:
+        trigger_type = trigger_context.get("trigger_type", "unknown")
+        lines = [f"=== TRIGGER CONTEXT ===", f"trigger_type: {trigger_type}"]
+
+        if trigger_type == "signal":
+            pool_name = trigger_context.get("signal_pool_name", "Unknown")
+            pool_logic = trigger_context.get("pool_logic", "OR")
+            trigger_symbol = trigger_context.get("trigger_symbol", "N/A")
+            lines.append(f"signal_pool_name: {pool_name}")
+            lines.append(f"pool_logic: {pool_logic}")
+            lines.append(f"trigger_symbol: {trigger_symbol}")
+
+            triggered_signals = trigger_context.get("triggered_signals", [])
+            if triggered_signals:
+                lines.append("triggered_signals:")
+                for sig in triggered_signals:
+                    # Support both "signal_name" (from signal_detection_service) and "name" (fallback)
+                    sig_name = sig.get("signal_name") or sig.get("name", "Unknown Signal")
+                    description = sig.get("description")
+                    metric = sig.get("metric", "N/A")
+                    time_window = sig.get("time_window", "N/A")
+                    operator = sig.get("operator", "N/A")
+                    threshold = sig.get("threshold", "N/A")
+                    # Support both "current_value" (from signal_detection_service) and "actual_value" (fallback)
+                    actual_value = sig.get("current_value") or sig.get("actual_value", "N/A")
+
+                    # Format metric with unit based on metric type
+                    unit = _get_metric_unit(metric)
+                    metric_display = f"{metric} ({unit})" if unit else metric
+                    threshold_display = f"{threshold}{unit}" if unit else str(threshold)
+                    value_display = f"{actual_value:.4f}{unit}" if isinstance(actual_value, (int, float)) and unit else str(actual_value)
+
+                    lines.append(f"  - name: {sig_name}")
+                    if description:
+                        lines.append(f"    description: {description}")
+                    lines.append(f"    metric: {metric_display}")
+                    lines.append(f"    time_window: {time_window}")
+                    lines.append(f"    condition: {operator} {threshold_display}")
+                    lines.append(f"    current_value: {value_display}")
+        elif trigger_type == "scheduled":
+            interval = trigger_context.get("trigger_interval", "N/A")
+            lines.append(f"trigger_interval: {interval} minutes")
+
+        trigger_context_text = "\n".join(lines)
+
     return {
         # Legacy variables (for Default prompt and backward compatibility)
         "account_state": account_state,
@@ -875,6 +950,8 @@ def _build_prompt_context(
         "positions_detail": positions_detail,
         # Recent trades history (NEW - helps AI understand trading patterns)
         "recent_trades_summary": recent_trades_summary,
+        # Trigger context (signal or scheduled trigger information)
+        "trigger_context": trigger_context_text,
         # K-line and technical indicator variables (dynamically generated)
         **kline_context,  # Merge K-line/indicator variables like {BTC_klines_15m}, {BTC_MACD_15m}, etc.
     }
@@ -1000,6 +1077,7 @@ def call_ai_for_decision(
     symbols: Optional[List[str]] = None,
     hyperliquid_state: Optional[Dict[str, Any]] = None,
     symbol_metadata: Optional[Dict[str, Any]] = None,
+    trigger_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """Call AI model API to get trading decision
 
@@ -1013,6 +1091,7 @@ def call_ai_for_decision(
         symbols: List of symbols to include sampling data for (preferred method)
         hyperliquid_state: Optional Hyperliquid account state for real trading
         symbol_metadata: Optional mapping of symbol -> display name overrides
+        trigger_context: Optional context about what triggered this decision (signal or scheduled)
     """
     # Check if this is a default API key
     if _is_default_api_key(account.api_key):
@@ -1073,6 +1152,7 @@ def call_ai_for_decision(
             sampling_interval=sampling_interval,
             environment=global_environment,
             template_text=template.template_text,
+            trigger_context=trigger_context,
         )
         context["sampling_data"] = sampling_data
     else:
@@ -1103,6 +1183,7 @@ def call_ai_for_decision(
             sampling_interval=sampling_interval,
             environment=global_environment,
             template_text=template.template_text,
+            trigger_context=trigger_context,
         )
 
     try:

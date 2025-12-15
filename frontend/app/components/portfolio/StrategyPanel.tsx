@@ -17,6 +17,17 @@ interface StrategyConfig {
   interval_seconds: number
   enabled: boolean
   last_trigger_at?: string | null
+  signal_pool_id?: number | null
+  signal_pool_name?: string | null
+}
+
+interface SignalPool {
+  id: number
+  pool_name: string
+  signal_ids: number[]
+  symbols: string[]
+  enabled: boolean
+  logic?: string
 }
 
 interface GlobalSamplingConfig {
@@ -56,6 +67,8 @@ export default function StrategyPanel({
   const [triggerInterval, setTriggerInterval] = useState<string>('150')
   const [enabled, setEnabled] = useState<boolean>(true)
   const [lastTriggerAt, setLastTriggerAt] = useState<string | null>(null)
+  const [signalPoolId, setSignalPoolId] = useState<number | null>(null)
+  const [signalPools, setSignalPools] = useState<SignalPool[]>([])
 
   // Global settings
   const [samplingInterval, setSamplingInterval] = useState<string>('18')
@@ -81,18 +94,29 @@ export default function StrategyPanel({
     setLoading(true)
     resetMessages()
     try {
-      // Fetch trader-specific config
-      const strategyResponse = await fetch(`/api/account/${accountId}/strategy`)
+      // Fetch trader-specific config and signal pools in parallel
+      const [strategyResponse, signalsResponse, globalResponse] = await Promise.all([
+        fetch(`/api/account/${accountId}/strategy`),
+        fetch('/api/signals'),
+        fetch('/api/config/global-sampling'),
+      ])
+
       if (strategyResponse.ok) {
         const strategy: StrategyConfig = await strategyResponse.json()
         setPriceThreshold((strategy.price_threshold ?? 1.0).toString())
         setTriggerInterval((strategy.interval_seconds ?? 150).toString())
         setEnabled(strategy.enabled)
         setLastTriggerAt(strategy.last_trigger_at ?? null)
+        setSignalPoolId(strategy.signal_pool_id ?? null)
       }
 
-      // Fetch global sampling config
-      const globalResponse = await fetch('/api/config/global-sampling')
+      if (signalsResponse.ok) {
+        const data = await signalsResponse.json()
+        const pools: SignalPool[] = data.pools || []
+        // Only show enabled signal pools
+        setSignalPools(pools.filter((p) => p.enabled))
+      }
+
       if (globalResponse.ok) {
         const globalConfig: GlobalSamplingConfig = await globalResponse.json()
         setSamplingInterval((globalConfig.sampling_interval ?? 18).toString())
@@ -207,7 +231,8 @@ export default function StrategyPanel({
         interval_seconds: interval,
         enabled: enabled,
         trigger_mode: "unified",
-        tick_batch_size: 1
+        tick_batch_size: 1,
+        signal_pool_id: signalPoolId,
       }
       console.log('Frontend saving payload:', payload)
       const response = await fetch(`/api/account/${accountId}/strategy`, {
@@ -225,6 +250,7 @@ export default function StrategyPanel({
       setTriggerInterval((result.interval_seconds ?? 150).toString())
       setEnabled(result.enabled)
       setLastTriggerAt(result.last_trigger_at ?? null)
+      setSignalPoolId(result.signal_pool_id ?? null)
 
       setSuccess('Trader configuration saved successfully.')
     } catch (err) {
@@ -233,7 +259,7 @@ export default function StrategyPanel({
     } finally {
       setSaving(false)
     }
-  }, [accountId, priceThreshold, triggerInterval, enabled, resetMessages])
+  }, [accountId, priceThreshold, triggerInterval, enabled, signalPoolId, resetMessages])
 
   const handleSaveGlobal = useCallback(async () => {
     resetMessages()
@@ -336,19 +362,31 @@ export default function StrategyPanel({
               </CardHeader>
               <CardContent className="space-y-4">
                 <section className="space-y-2">
-                  <div className="text-xs text-muted-foreground uppercase tracking-wide">Price Threshold (%)</div>
-                  <Input
-                    type="number"
-                    min={0.1}
-                    max={10.0}
-                    step={0.1}
-                    value={priceThreshold}
-                    onChange={(event) => {
-                      setPriceThreshold(event.target.value)
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">Signal Pool</div>
+                  <Select
+                    value={signalPoolId?.toString() ?? 'none'}
+                    onValueChange={(value) => {
+                      setSignalPoolId(value === 'none' ? null : parseInt(value))
                       resetMessages()
                     }}
-                  />
-                  <p className="text-xs text-muted-foreground">Trigger when price changes by this percentage</p>
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select signal pool (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No signal pool (scheduled only)</SelectItem>
+                      {signalPools.map((pool) => (
+                        <SelectItem key={pool.id} value={pool.id.toString()}>
+                          {pool.pool_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {signalPoolId
+                      ? 'Trigger when signal pool conditions are met'
+                      : 'Only use scheduled interval trigger'}
+                  </p>
                 </section>
 
                 <section className="space-y-2">
@@ -370,7 +408,7 @@ export default function StrategyPanel({
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-xs text-muted-foreground uppercase tracking-wide">Strategy Status</div>
-                      <p className="text-xs text-muted-foreground">{enabled ? 'Enabled: strategy reacts to price events.' : 'Disabled: strategy will not auto-trade.'}</p>
+                      <p className="text-xs text-muted-foreground">{enabled ? 'Enabled: strategy reacts to signals and scheduled triggers.' : 'Disabled: strategy will not auto-trade.'}</p>
                     </div>
                     <label className="inline-flex items-center gap-2 text-sm">
                       <input

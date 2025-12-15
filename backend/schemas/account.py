@@ -51,7 +51,8 @@ class StrategyConfigBase(BaseModel):
     interval_seconds: Optional[int] = None
     tick_batch_size: Optional[int] = None
     enabled: bool = True
-    price_threshold: Optional[float] = None
+    price_threshold: Optional[float] = None  # Deprecated, kept for compatibility
+    signal_pool_id: Optional[int] = None  # Signal pool binding for signal-based triggering
 
 
 class StrategyConfigUpdate(StrategyConfigBase):
@@ -62,3 +63,4 @@ class StrategyConfigUpdate(StrategyConfigBase):
 class StrategyConfig(StrategyConfigBase):
     """Strategy configuration response"""
     last_trigger_at: Optional[str] = None
+    signal_pool_name: Optional[str] = None  # Signal pool name for display

@@ -26,8 +26,9 @@ def upsert_strategy(
     enabled: bool = True,
     price_threshold: Optional[float] = None,
     trigger_interval: Optional[int] = None,
+    signal_pool_id: Optional[int] = None,
 ) -> AccountStrategyConfig:
-    print(f"upsert_strategy called with: account_id={account_id}, interval_seconds={interval_seconds}, trigger_interval={trigger_interval}")
+    print(f"upsert_strategy called with: account_id={account_id}, interval_seconds={interval_seconds}, trigger_interval={trigger_interval}, signal_pool_id={signal_pool_id}")
     strategy = get_strategy_by_account(db, account_id)
     if strategy is None:
         strategy = AccountStrategyConfig(account_id=account_id)
@@ -39,6 +40,8 @@ def upsert_strategy(
     strategy.enabled = "true" if enabled else "false"
     if price_threshold is not None:
         strategy.price_threshold = price_threshold
+    # signal_pool_id can be None (unbind) or an integer (bind to pool)
+    strategy.signal_pool_id = signal_pool_id
 
     db.commit()
     db.refresh(strategy)

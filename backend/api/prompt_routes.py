@@ -414,6 +414,28 @@ def preview_prompt(
         # IMPORTANT: _build_prompt_context is the ONLY function that builds prompt context.
         # It now handles K-line and indicator variables internally when template_text is provided.
         # DO NOT add separate K-line processing here - it will cause inconsistencies.
+
+        # Build a sample trigger_context for preview purposes
+        # This shows users what the variable will look like when triggered
+        sample_trigger_context = {
+            "trigger_type": "signal",
+            "signal_pool_id": 1,
+            "signal_pool_name": "OI Surge Monitor",
+            "pool_logic": "OR",
+            "triggered_signals": [
+                {
+                    "signal_name": "OI Delta Alert",
+                    "description": "Open Interest increased significantly, indicating new positions entering the market",
+                    "metric": "oi_delta",
+                    "operator": ">",
+                    "threshold": 2.0,
+                    "current_value": 2.5,
+                    "time_window": "15m",
+                }
+            ],
+            "trigger_symbol": "BTC",
+        }
+
         context = _build_prompt_context(
             account,
             portfolio,
@@ -428,6 +450,7 @@ def preview_prompt(
             sampling_interval=sampling_interval,
             environment=hyperliquid_environment or "mainnet",
             template_text=template_text,
+            trigger_context=sample_trigger_context,
         )
         context["sampling_data"] = sampling_data
 

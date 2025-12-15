@@ -4,11 +4,40 @@ This document lists all available variables you can use in your prompt templates
 
 ---
 
-## Required Variable
+## Required Variables
 
 | Variable | Description |
 |----------|-------------|
 | `{output_format}` | **MUST INCLUDE** - JSON output schema and format requirements. Ensures AI returns valid, parseable JSON. |
+| `{trigger_context}` | **RECOMMENDED** - Trigger context information. Tells AI what triggered this decision (signal or scheduled) and provides signal details when triggered by signal pool. |
+
+### Trigger Context Format
+
+When triggered by **signal pool**:
+```
+=== TRIGGER CONTEXT ===
+trigger_type: signal
+signal_pool_name: OI Surge Monitor
+pool_logic: OR
+trigger_symbol: BTC
+triggered_signals:
+  - name: OI Delta Signal
+    metric: oi_delta_percent
+    condition: > 2.0
+    current_value: 3.5
+```
+
+When triggered by **scheduled interval**:
+```
+=== TRIGGER CONTEXT ===
+trigger_type: scheduled
+trigger_interval: 150 minutes
+```
+
+**Why include this?** The AI can make more informed decisions when it knows:
+- What triggered the analysis (signal vs scheduled check)
+- Which specific signals fired and their values
+- The market conditions that caused the trigger
 
 ---
 

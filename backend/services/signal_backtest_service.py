@@ -4,6 +4,7 @@ Signal Backtest Service
 Backtests signals against historical data to show where triggers would occur.
 """
 
+import json
 import logging
 import sys
 from typing import Dict, List, Any, Optional

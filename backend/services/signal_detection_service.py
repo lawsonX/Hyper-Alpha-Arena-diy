@@ -5,6 +5,7 @@ Detects signal triggers based on market flow data.
 Uses edge-triggered logic: only triggers when condition changes from False to True.
 """
 
+import json
 import logging
 import time
 from typing import Dict, List, Optional, Any

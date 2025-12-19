@@ -1033,7 +1033,10 @@ export default function SignalManager() {
                         // Pool trigger (new format)
                         if ('logic' in triggerData && 'signals_triggered' in triggerData) {
                           const logic = triggerData.logic as string
-                          const triggeredSignals = triggerData.signals_triggered as Array<{signal_name: string; metric: string; current_value?: number; threshold?: number}>
+                          const triggeredSignals = triggerData.signals_triggered as Array<{
+                            signal_name: string; metric: string; current_value?: number; threshold?: number;
+                            direction?: string; volume?: number; volume_threshold?: number;
+                          }>
                           return (
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
@@ -1044,7 +1047,11 @@ export default function SignalManager() {
                               </div>
                               {triggeredSignals.map((s, i) => (
                                 <div key={i} className="ml-4 text-xs">
-                                  • {s.signal_name}: {s.metric} = {s.current_value?.toFixed(4)} (threshold: {s.threshold})
+                                  {s.metric === 'taker_volume' ? (
+                                    <>• {s.signal_name}: {s.direction?.toUpperCase()} | ratio={s.current_value?.toFixed(2)} (≥{s.threshold}) | vol=${((s.volume || 0) / 1e6).toFixed(2)}M (≥${((s.volume_threshold || 0) / 1e6).toFixed(2)}M)</>
+                                  ) : (
+                                    <>• {s.signal_name}: {s.metric} = {s.current_value?.toFixed(4)} (threshold: {s.threshold})</>
+                                  )}
                                 </div>
                               ))}
                             </div>

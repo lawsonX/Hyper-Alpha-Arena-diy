@@ -922,11 +922,20 @@ def check_pnl_sync_status(
     """
     Check if there are trades that need PnL synchronization.
     Returns the count of unsynchronized trades.
+    Only counts trades that have order IDs (can be synced).
     """
+    from sqlalchemy import or_
+
     query = db.query(AIDecisionLog).filter(
         AIDecisionLog.operation.in_(["buy", "sell", "close"]),
         AIDecisionLog.executed == "true",
         AIDecisionLog.pnl_updated_at == None,
+        # Only count trades that have at least one order ID (can be synced)
+        or_(
+            AIDecisionLog.hyperliquid_order_id != None,
+            AIDecisionLog.tp_order_id != None,
+            AIDecisionLog.sl_order_id != None,
+        ),
     )
 
     if trading_mode:
@@ -1117,7 +1126,8 @@ def _process_fills_for_environment(
                     total_pnl += agg["total_pnl"]
                     matched_order_ids.add(order_id_str)
 
-        if total_pnl != 0:
+        # If matched any order, mark as synced (even if PnL is 0 for opening trades)
+        if matched_order_ids:
             decision.realized_pnl = total_pnl
             decision.pnl_updated_at = datetime.utcnow()
             updated = True
@@ -1139,10 +1149,9 @@ def _process_fills_for_environment(
                 order_id = str(matching_trade.order_id)
                 if order_id in order_aggregates:
                     agg = order_aggregates[order_id]
-                    if agg["total_pnl"] != 0:
-                        decision.realized_pnl = agg["total_pnl"]
-                        decision.pnl_updated_at = datetime.utcnow()
-                        updated = True
+                    decision.realized_pnl = agg["total_pnl"]
+                    decision.pnl_updated_at = datetime.utcnow()
+                    updated = True
 
                     # Also update hyperliquid_order_id for future direct matching
                     if not decision.hyperliquid_order_id:

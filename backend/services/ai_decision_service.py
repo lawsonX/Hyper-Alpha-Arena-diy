@@ -2456,9 +2456,14 @@ def _format_flow_indicator(indicator_name: str, indicator_data: Any) -> str:
             end_price = indicator_data.get("end_price")
             last_5 = indicator_data.get("last_5", [])
 
-            result = [f"Price Change: {current:+.3f}%"]
+            # Calculate USD change value
             if start_price and end_price:
-                result.append(f"Price: {start_price:.2f} -> {end_price:.2f}")
+                change_usd = end_price - start_price
+                usd_str = _format_price_value(change_usd, reference_price=end_price, with_sign=True)
+                result = [f"Price Change: {current:+.3f}% ({usd_str})"]
+                result.append(f"Price: {_format_price_value(start_price)} -> {_format_price_value(end_price)}")
+            else:
+                result = [f"Price Change: {current:+.3f}%"]
             if last_5:
                 result.append(f"Change last 5: {', '.join(f'{v:+.3f}%' for v in last_5)}")
             return "\n".join(result)
@@ -2469,9 +2474,14 @@ def _format_flow_indicator(indicator_name: str, indicator_data: Any) -> str:
             low = indicator_data.get("low")
             last_5 = indicator_data.get("last_5", [])
 
-            result = [f"Volatility: {current:.3f}%"]
+            # Calculate USD range value
             if high and low:
-                result.append(f"Range: {low:.2f} - {high:.2f}")
+                range_usd = high - low
+                usd_str = _format_price_value(range_usd, reference_price=high, with_sign=False)
+                result = [f"Volatility: {current:.3f}% ({usd_str})"]
+                result.append(f"Range: {_format_price_value(low)} - {_format_price_value(high)}")
+            else:
+                result = [f"Volatility: {current:.3f}%"]
             if last_5:
                 result.append(f"Volatility last 5: {', '.join(f'{v:.3f}%' for v in last_5)}")
             return "\n".join(result)
@@ -2498,6 +2508,44 @@ def _format_usd(value: float) -> str:
         return f"{sign}${abs_val/1_000:.2f}K"
     else:
         return f"{sign}${abs_val:.2f}"
+
+
+def _format_price_value(value: float, reference_price: float = None, with_sign: bool = False) -> str:
+    """
+    Format price value with adaptive decimal places based on price magnitude.
+
+    Args:
+        value: The price value to format
+        reference_price: Reference price to determine decimal places (uses value if None)
+        with_sign: Whether to include +/- sign prefix
+
+    Returns:
+        Formatted price string like "$94,521.00" or "$+2,156.00"
+    """
+    if value is None:
+        return "N/A"
+
+    ref = reference_price if reference_price is not None else abs(value)
+    abs_val = abs(value)
+
+    # Determine decimal places based on reference price magnitude
+    if ref >= 1000:
+        decimals = 2
+    elif ref >= 1:
+        decimals = 4
+    elif ref >= 0.01:
+        decimals = 6
+    else:
+        decimals = 8
+
+    # Format with thousand separators
+    formatted = f"{abs_val:,.{decimals}f}"
+
+    if with_sign:
+        sign = "+" if value >= 0 else "-"
+        return f"${sign}{formatted}"
+    else:
+        return f"${formatted}"
 
 
 def _build_klines_and_indicators_context(

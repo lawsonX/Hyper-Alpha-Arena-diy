@@ -222,6 +222,7 @@ export default function HyperliquidAssetChart({
       symbol: string
       price?: number
       chartIndex: number
+      account_id: number
     }> = []
 
     trades.forEach(trade => {
@@ -254,7 +255,8 @@ export default function HyperliquidAssetChart({
           side: trade.side,
           symbol: trade.symbol,
           price: trade.price,
-          chartIndex: nearestIdx
+          chartIndex: nearestIdx,
+          account_id: trade.account_id
         })
       }
     })
@@ -303,9 +305,10 @@ export default function HyperliquidAssetChart({
           if (!dataPoint) return null
 
           const x = xAxis.scale(dataPoint.datetime_str)
-          // Get y value from first account's data at this point
-          const firstAccount = accountsData[0]
-          const yValue = firstAccount ? dataPoint[firstAccount.username] : null
+          // Find the account this trade belongs to and get y value from that account's curve
+          const account = accountsData.find(a => a.account_id === marker.account_id)
+          if (!account) return null  // Skip if account not found (filtered out)
+          const yValue = dataPoint[account.username]
           if (yValue == null || x == null) return null
 
           const y = yAxis.scale(yValue)

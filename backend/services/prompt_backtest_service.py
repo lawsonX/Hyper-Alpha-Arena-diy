@@ -126,28 +126,40 @@ def _process_and_save_item(
     """Process a single item and save result immediately (called in thread)."""
     item_id = item["item_id"]
     task_id = item["task_id"]
-    response = None
+    api_response = None
+    content = None
 
     try:
-        # Call LLM
-        response = _call_llm_with_config(
+        # Call LLM - now returns full API response dict
+        api_response = _call_llm_with_config(
             account_config, system_prompt, item["modified_prompt"]
         )
 
-        if not response:
+        if not api_response:
             _save_item_result(item_id, task_id, {
                 "success": False,
                 "error": "LLM call failed - no response",
             })
             return
 
-        # Parse decision
-        decision = _parse_decision(response)
+        # Extract content and reasoning from response
+        content = _get_content_from_response(api_response)
+        reasoning = _extract_reasoning_from_response(api_response)
+
+        if not content:
+            _save_item_result(item_id, task_id, {
+                "success": False,
+                "error": "LLM call failed - empty content",
+            })
+            return
+
+        # Parse decision from content
+        decision = _parse_decision(content)
         if not decision:
             _save_item_result(item_id, task_id, {
                 "success": False,
                 "error": "Failed to parse decision",
-                "raw_response": response[:2000],
+                "raw_response": content[:2000],
             })
             return
 
@@ -157,12 +169,15 @@ def _process_and_save_item(
         decision_changed = orig_op != new_op
         change_type = f"{orig_op}_to_{new_op}" if decision_changed else None
 
+        # Use extracted reasoning if available, otherwise fall back to content
+        final_reasoning = reasoning if reasoning else content[:2000]
+
         _save_item_result(item_id, task_id, {
             "success": True,
             "operation": decision.get("operation"),
             "symbol": decision.get("symbol"),
             "target_portion": decision.get("target_portion_of_balance"),
-            "reasoning": decision.get("_reasoning", response[:2000]),
+            "reasoning": final_reasoning,
             "decision_json": json.dumps(decision),
             "decision_changed": decision_changed,
             "change_type": change_type,
@@ -173,7 +188,7 @@ def _process_and_save_item(
         _save_item_result(item_id, task_id, {
             "success": False,
             "error": str(e)[:500],
-            "raw_response": response[:2000] if response else None,
+            "raw_response": content[:2000] if content else None,
         })
 
 
@@ -234,8 +249,11 @@ def _get_system_prompt(db, account_id: int) -> str:
 
 def _call_llm_with_config(
     config: Dict[str, str], system_prompt: str, user_prompt: str
-) -> Optional[str]:
-    """Call LLM API with config dict (thread-safe, no ORM objects)."""
+) -> Optional[Dict[str, Any]]:
+    """Call LLM API with config dict (thread-safe, no ORM objects).
+
+    Returns full API response dict for reasoning extraction, or None on failure.
+    """
     from services.ai_decision_service import build_chat_completion_endpoints
 
     headers = {
@@ -296,7 +314,7 @@ def _call_llm_with_config(
                 data = response.json()
                 choices = data.get("choices", [])
                 if choices:
-                    return choices[0].get("message", {}).get("content", "")
+                    return data  # Return full response for reasoning extraction
 
             logger.warning(f"LLM call failed: {response.status_code} - {response.text[:200]}")
 
@@ -305,6 +323,81 @@ def _call_llm_with_config(
             continue
 
     return None
+
+
+def _extract_reasoning_from_response(api_result: Dict[str, Any]) -> str:
+    """Extract reasoning content from AI response (multi-vendor support).
+
+    Supports: OpenAI (o1/o3/gpt-5), DeepSeek (R1), Qwen (QwQ), Claude (thinking), Gemini (thoughts)
+    """
+    try:
+        reasoning_parts = []
+
+        choices = api_result.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            return ""
+
+        choice_item = choices[0]
+        if not isinstance(choice_item, dict):
+            return ""
+
+        msg = choice_item.get("message")
+        if not isinstance(msg, dict):
+            return ""
+
+        # Strategy 1: OpenAI/DeepSeek/Qwen standard format
+        # message.reasoning (OpenAI o1/o3/gpt-5)
+        # message.reasoning_content (DeepSeek R1, Qwen QwQ)
+        for field in ["reasoning", "reasoning_content"]:
+            field_value = msg.get(field)
+            if field_value and isinstance(field_value, str) and field_value.strip():
+                reasoning_parts.append(field_value.strip())
+
+        # Strategy 2: Claude format - thinking blocks in content array
+        content_array = msg.get("content")
+        if isinstance(content_array, list):
+            for block in content_array:
+                if isinstance(block, dict) and block.get("type") == "thinking":
+                    thinking_text = block.get("thinking")
+                    if thinking_text and isinstance(thinking_text, str) and thinking_text.strip():
+                        reasoning_parts.append(thinking_text.strip())
+
+        # Strategy 3: Gemini format - parts array with thought=true flag
+        parts_array = msg.get("parts")
+        if isinstance(parts_array, list):
+            for part in parts_array:
+                if isinstance(part, dict) and part.get("thought") is True:
+                    thought_text = part.get("text")
+                    if thought_text and isinstance(thought_text, str) and thought_text.strip():
+                        reasoning_parts.append(thought_text.strip())
+
+        if reasoning_parts:
+            return "\n\n".join(reasoning_parts)
+
+        return ""
+    except Exception as e:
+        logger.warning(f"Failed to extract reasoning: {e}")
+        return ""
+
+
+def _get_content_from_response(api_result: Dict[str, Any]) -> str:
+    """Extract content text from API response."""
+    try:
+        choices = api_result.get("choices", [])
+        if choices:
+            msg = choices[0].get("message", {})
+            content = msg.get("content", "")
+            # Handle Claude format where content is array
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                return "\n".join(text_parts)
+            return content or ""
+        return ""
+    except Exception:
+        return ""
 
 
 def _parse_decision(response: str) -> Optional[Dict[str, Any]]:

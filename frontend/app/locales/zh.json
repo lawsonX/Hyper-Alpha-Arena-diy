@@ -994,7 +994,15 @@
     "noTasks": "暂无任务",
     "selectTaskHint": "选择任务查看结果",
     "selectItemHint": "选择结果查看详情",
-    "description": "基于历史决策回放修改后的提示词效果，占位符不可更改。"
+    "description": "基于历史决策回放修改后的提示词效果，占位符不可更改。",
+    "preview": "预览",
+    "matchedCount": "{{matched}} 条匹配，{{selected}} 条已选",
+    "clearSearch": "清除",
+    "status": "状态",
+    "modified": "已修改",
+    "matched": "已匹配",
+    "noMatch": "未匹配",
+    "importToWorkspace": "导入到工作区"
   },
   "traderData": {
     "export": "导出数据",

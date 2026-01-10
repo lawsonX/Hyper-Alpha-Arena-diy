@@ -29,9 +29,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { RefreshCw, Play, ChevronRight, X, Loader2, History } from 'lucide-react'
+import { RefreshCw, Play, ChevronRight, X, Loader2, History, Search, Check } from 'lucide-react'
 import {
   createBacktestTask,
+  BacktestTaskItemForImport,
 } from '@/lib/api'
 import BacktestHistoryModal from './BacktestHistoryModal'
 
@@ -60,6 +61,11 @@ interface PromptBacktestProps {
 
 interface SelectedRecord extends ModelChatEntry {
   modifiedPrompt: string
+  // Search/replace state
+  isMatched?: boolean        // Whether keyword was found
+  isSelected?: boolean       // Whether selected for replacement (default true)
+  isModified?: boolean       // Whether already replaced
+  matchContext?: string      // Matched line with context
 }
 
 export default function PromptBacktest({
@@ -87,6 +93,7 @@ export default function PromptBacktest({
   const [replaceText, setReplaceText] = useState('')
   const [replaceCount, setReplaceCount] = useState<number | null>(null)
   const [loadingSnapshots, setLoadingSnapshots] = useState(false)
+  const [searchMode, setSearchMode] = useState(false)  // Whether in search preview mode
 
   // State for editing single prompt
   const [editingRecord, setEditingRecord] = useState<SelectedRecord | null>(null)
@@ -95,6 +102,7 @@ export default function PromptBacktest({
   // State for history modal
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
   const [initialTaskId, setInitialTaskId] = useState<number | undefined>(undefined)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const PAGE_SIZE = 100
 
@@ -241,17 +249,134 @@ export default function PromptBacktest({
     if (!findText) return
     let count = 0
     const updated = workspace.map(r => {
-      if (r.modifiedPrompt.includes(findText)) {
+      // Only replace if matched and selected
+      if (r.isMatched && r.isSelected !== false && r.modifiedPrompt.includes(findText)) {
         count++
         return {
           ...r,
           modifiedPrompt: r.modifiedPrompt.replaceAll(findText, replaceText),
+          isModified: true,
+          isMatched: false,  // Clear match state after replace
+          matchContext: undefined,
         }
       }
       return r
     })
     setWorkspace(updated)
     setReplaceCount(count)
+    setSearchMode(false)
+  }
+
+  // Search and preview matches
+  const searchPreview = () => {
+    if (!findText) {
+      // Clear search mode
+      setSearchMode(false)
+      setWorkspace(prev => prev.map(r => ({
+        ...r,
+        isMatched: undefined,
+        isSelected: undefined,
+        matchContext: undefined,
+      })))
+      return
+    }
+
+    const updated = workspace.map(r => {
+      const matchPos = r.modifiedPrompt.indexOf(findText)
+
+      if (matchPos >= 0) {
+        // Find line number of match position
+        const textBefore = r.modifiedPrompt.substring(0, matchPos)
+        const linesBefore = textBefore.split('\n')
+        const matchLineNum = linesBefore.length - 1  // 0-indexed
+
+        // Split entire text into lines
+        const allLines = r.modifiedPrompt.split('\n')
+
+        // Calculate how many lines the search text spans
+        const searchLines = findText.split('\n').length
+
+        // Extract context: 1 line before, matched lines, 1 line after
+        const start = Math.max(0, matchLineNum - 1)
+        const end = Math.min(allLines.length, matchLineNum + searchLines + 1)
+        const contextLines = allLines.slice(start, end).map((line, i) => {
+          const lineNum = start + i + 1
+          const isInMatch = (start + i >= matchLineNum) && (start + i < matchLineNum + searchLines)
+          return `${isInMatch ? '>' : ' '} ${lineNum}: ${line}`
+        })
+
+        return {
+          ...r,
+          isMatched: true,
+          isSelected: true,  // Default selected
+          matchContext: contextLines.join('\n'),
+        }
+      }
+
+      return {
+        ...r,
+        isMatched: false,
+        isSelected: undefined,
+        matchContext: undefined,
+      }
+    })
+
+    setWorkspace(updated)
+    setSearchMode(true)
+    setReplaceCount(null)
+  }
+
+  // Toggle selection for a workspace item
+  const toggleWorkspaceSelect = (id: number) => {
+    setWorkspace(prev => prev.map(r =>
+      r.id === id ? { ...r, isSelected: !r.isSelected } : r
+    ))
+  }
+
+  // Clear search mode
+  const clearSearch = () => {
+    setFindText('')
+    setReplaceText('')
+    setSearchMode(false)
+    setReplaceCount(null)
+    setWorkspace(prev => prev.map(r => ({
+      ...r,
+      isMatched: undefined,
+      isSelected: undefined,
+      matchContext: undefined,
+    })))
+  }
+
+  // Import items from history task to workspace
+  const handleImportFromHistory = (items: BacktestTaskItemForImport[]) => {
+    const newWorkspaceItems: SelectedRecord[] = items.map(item => ({
+      id: item.id,
+      account_id: Number(accountId),
+      account_name: '',
+      operation: item.operation || '',
+      symbol: item.symbol,
+      reason: item.reason || '',
+      executed: true,
+      decision_time: item.decision_time,
+      realized_pnl: item.realized_pnl,
+      has_snapshot: true,
+      prompt_snapshot: item.modified_prompt,
+      modifiedPrompt: item.modified_prompt,
+    }))
+
+    setWorkspace(prev => {
+      const existingIds = new Set(prev.map(p => p.id))
+      const newItems = newWorkspaceItems.filter(w => !existingIds.has(w.id))
+      // Sort by decision_time descending (newest first)
+      return [...prev, ...newItems].sort((a, b) => {
+        const timeA = a.decision_time ? new Date(a.decision_time).getTime() : 0
+        const timeB = b.decision_time ? new Date(b.decision_time).getTime() : 0
+        return timeB - timeA
+      })
+    })
+
+    // Clear search state
+    clearSearch()
   }
 
   // Save edited prompt
@@ -270,7 +395,8 @@ export default function PromptBacktest({
 
   // Submit backtest task
   const submitBacktest = async () => {
-    if (workspace.length === 0 || accountId === 'all') return
+    if (workspace.length === 0 || accountId === 'all' || isSubmitting) return
+    setIsSubmitting(true)
     try {
       const result = await createBacktestTask({
         account_id: Number(accountId),
@@ -286,6 +412,8 @@ export default function PromptBacktest({
       setHistoryModalOpen(true)
     } catch (error) {
       console.error('Failed to create backtest task:', error)
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -450,8 +578,12 @@ export default function PromptBacktest({
                   <History className="h-4 w-4 mr-1" />
                   {t('promptBacktest.history', 'History')}
                 </Button>
-                <Button size="sm" onClick={submitBacktest} disabled={workspace.length === 0}>
-                  <Play className="h-4 w-4 mr-1" />
+                <Button size="sm" onClick={submitBacktest} disabled={workspace.length === 0 || isSubmitting}>
+                  {isSubmitting ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4 mr-1" />
+                  )}
                   {t('promptBacktest.runBacktest', 'Run')}
                 </Button>
               </div>
@@ -459,23 +591,62 @@ export default function PromptBacktest({
           </CardHeader>
           <CardContent className="flex-1 flex flex-col pt-0 space-y-3 min-h-0">
             {/* Batch Replace */}
-            <div className="flex gap-2 items-start shrink-0">
+            <div className="flex gap-2 items-stretch shrink-0">
               <Textarea
                 placeholder={t('promptBacktest.findText', 'Find...')}
                 value={findText}
-                onChange={e => setFindText(e.target.value)}
-                className="flex-1 min-h-[60px] max-h-[100px] text-xs font-mono resize-none"
+                onChange={e => {
+                  setFindText(e.target.value)
+                  // Clear search mode when input changes
+                  if (searchMode) {
+                    setSearchMode(false)
+                    setReplaceCount(null)
+                    setWorkspace(prev => prev.map(r => ({
+                      ...r,
+                      isMatched: undefined,
+                      isSelected: undefined,
+                      matchContext: undefined,
+                    })))
+                  }
+                }}
+                className="flex-1 min-h-[68px] max-h-[100px] text-xs font-mono resize-none"
               />
               <Textarea
                 placeholder={t('promptBacktest.replaceWith', 'Replace...')}
                 value={replaceText}
                 onChange={e => setReplaceText(e.target.value)}
-                className="flex-1 min-h-[60px] max-h-[100px] text-xs font-mono resize-none"
+                className="flex-1 min-h-[68px] max-h-[100px] text-xs font-mono resize-none"
               />
-              <Button variant="outline" size="sm" onClick={applyReplace} disabled={!findText} className="mt-4">
-                {t('promptBacktest.replace', 'Replace')}
-              </Button>
+              <div className="flex flex-col gap-1">
+                <Button variant="outline" size="sm" onClick={searchPreview} disabled={!findText} className="flex-1">
+                  <Search className="h-4 w-4 mr-1" />
+                  {t('promptBacktest.preview', 'Preview')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={applyReplace}
+                  disabled={!findText || !searchMode || workspace.filter(r => r.isMatched && r.isSelected).length === 0}
+                  className="flex-1"
+                >
+                  {t('promptBacktest.replace', 'Replace')}
+                </Button>
+              </div>
             </div>
+            {/* Search/Replace Status */}
+            {searchMode && (
+              <div className="flex items-center justify-between text-xs shrink-0">
+                <span className="text-muted-foreground">
+                  {t('promptBacktest.matchedCount', '{{matched}} matched, {{selected}} selected', {
+                    matched: workspace.filter(r => r.isMatched).length,
+                    selected: workspace.filter(r => r.isMatched && r.isSelected).length,
+                  })}
+                </span>
+                <Button variant="ghost" size="sm" onClick={clearSearch} className="h-6 px-2 text-xs">
+                  <X className="h-3 w-3 mr-1" />
+                  {t('promptBacktest.clearSearch', 'Clear')}
+                </Button>
+              </div>
+            )}
             {replaceCount !== null && (
               <p className="text-xs text-muted-foreground shrink-0">
                 {t('promptBacktest.replacedCount', 'Replaced in {{count}} records', { count: replaceCount })}
@@ -492,58 +663,97 @@ export default function PromptBacktest({
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      {searchMode && (
+                        <TableHead className="sticky top-0 bg-background z-10 w-8"></TableHead>
+                      )}
                       <TableHead className="sticky top-0 bg-background z-10">{t('promptBacktest.time', 'Time')}</TableHead>
                       <TableHead className="sticky top-0 bg-background z-10">{t('promptBacktest.operation', 'Op')}</TableHead>
                       <TableHead className="sticky top-0 bg-background z-10">{t('promptBacktest.symbol', 'Symbol')}</TableHead>
                       <TableHead className="sticky top-0 bg-background z-10 text-right">{t('promptBacktest.pnl', 'P&L')}</TableHead>
-                      <TableHead className="sticky top-0 bg-background z-10 max-w-[150px]">{t('promptBacktest.reason', 'Reason')}</TableHead>
+                      <TableHead className="sticky top-0 bg-background z-10">{t('promptBacktest.status', 'Status')}</TableHead>
                       <TableHead className="sticky top-0 bg-background z-10 w-24">{t('common.actions', 'Actions')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {workspace.map(record => (
-                      <TableRow key={record.id}>
-                        <TableCell className="text-xs">{formatTime(record.decision_time)}</TableCell>
-                        <TableCell>
-                          <Badge variant={getOperationColor(record.operation) as 'default' | 'secondary' | 'destructive'} className="text-xs">
-                            {record.operation}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs">{record.symbol || '-'}</TableCell>
-                        <TableCell className="text-xs text-right">
-                          {record.realized_pnl != null ? (
-                            <span className={record.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
-                              {record.realized_pnl >= 0 ? '+' : ''}{record.realized_pnl.toFixed(2)}
-                            </span>
-                          ) : '-'}
-                        </TableCell>
-                        <TableCell className="text-xs max-w-[150px] truncate" title={record.reason}>
-                          {record.reason || '-'}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 text-xs"
-                              onClick={() => {
-                                setEditingRecord(record)
-                                setEditDialogOpen(true)
-                              }}
-                            >
-                              {t('common.edit', 'Edit')}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 text-destructive"
-                              onClick={() => removeFromWorkspace(record.id)}
-                            >
-                              <X className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                      <>
+                        <TableRow
+                          key={record.id}
+                          className={record.isMatched === false ? 'opacity-50' : ''}
+                        >
+                          {searchMode && (
+                            <TableCell className="w-8">
+                              {record.isMatched && (
+                                <Checkbox
+                                  checked={record.isSelected}
+                                  onCheckedChange={() => toggleWorkspaceSelect(record.id)}
+                                />
+                              )}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-xs">{formatTime(record.decision_time)}</TableCell>
+                          <TableCell>
+                            <Badge variant={getOperationColor(record.operation) as 'default' | 'secondary' | 'destructive'} className="text-xs">
+                              {record.operation}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">{record.symbol || '-'}</TableCell>
+                          <TableCell className="text-xs text-right">
+                            {record.realized_pnl != null ? (
+                              <span className={record.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {record.realized_pnl >= 0 ? '+' : ''}{record.realized_pnl.toFixed(2)}
+                              </span>
+                            ) : '-'}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {record.isModified ? (
+                              <Badge variant="default" className="text-xs bg-green-600">
+                                <Check className="h-3 w-3 mr-1" />
+                                {t('promptBacktest.modified', 'Modified')}
+                              </Badge>
+                            ) : record.isMatched === true ? (
+                              <Badge variant="outline" className="text-xs border-blue-500 text-blue-600">
+                                {t('promptBacktest.matched', 'Matched')}
+                              </Badge>
+                            ) : record.isMatched === false ? (
+                              <span className="text-muted-foreground">{t('promptBacktest.noMatch', 'No match')}</span>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                onClick={() => {
+                                  setEditingRecord(record)
+                                  setEditDialogOpen(true)
+                                }}
+                              >
+                                {t('common.edit', 'Edit')}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 text-destructive"
+                                onClick={() => removeFromWorkspace(record.id)}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        {/* Context row - show when matched */}
+                        {record.isMatched && record.matchContext && (
+                          <TableRow key={`${record.id}-context`} className="bg-muted/30">
+                            <TableCell colSpan={searchMode ? 7 : 6} className="py-2">
+                              <pre className="text-xs font-mono whitespace-pre-wrap text-muted-foreground max-h-[80px] overflow-auto">
+                                {record.matchContext}
+                              </pre>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </>
                     ))}
                   </TableBody>
                 </Table>
@@ -585,6 +795,7 @@ export default function PromptBacktest({
         onOpenChange={setHistoryModalOpen}
         accountId={accountId}
         initialTaskId={initialTaskId}
+        onImportToWorkspace={handleImportFromHistory}
       />
     </div>
   )

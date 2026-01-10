@@ -984,7 +984,15 @@
     "noTasks": "No tasks yet",
     "selectTaskHint": "Select a task to view results",
     "selectItemHint": "Select a result to view detail",
-    "description": "Replay historical decisions with modified prompts. Placeholders are fixed."
+    "description": "Replay historical decisions with modified prompts. Placeholders are fixed.",
+    "preview": "Preview",
+    "matchedCount": "{{matched}} matched, {{selected}} selected",
+    "clearSearch": "Clear",
+    "status": "Status",
+    "modified": "Modified",
+    "matched": "Matched",
+    "noMatch": "No match",
+    "importToWorkspace": "Import to Workspace"
   },
   "traderData": {
     "export": "Export Data",

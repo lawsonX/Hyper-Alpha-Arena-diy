@@ -375,6 +375,50 @@ def get_item_detail(
     ).dict()
 
 
+@router.get("/tasks/{task_id}/items")
+def get_task_items_for_import(
+    task_id: int,
+    db: Session = Depends(get_db),
+):
+    """Get all items from a task for importing into workspace.
+
+    Returns the modified_prompt and original decision info for each item.
+    """
+    task = db.query(PromptBacktestTask).filter(PromptBacktestTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    items = db.query(PromptBacktestItem).filter(
+        PromptBacktestItem.task_id == task_id
+    ).all()
+
+    # Get original decision logs for additional info
+    decision_log_ids = [item.original_decision_log_id for item in items]
+    decision_logs = db.query(AIDecisionLog).filter(
+        AIDecisionLog.id.in_(decision_log_ids)
+    ).all()
+    decision_log_map = {dl.id: dl for dl in decision_logs}
+
+    result_items = []
+    for item in items:
+        dl = decision_log_map.get(item.original_decision_log_id)
+        result_items.append({
+            "id": item.original_decision_log_id,
+            "modified_prompt": item.modified_prompt,
+            "operation": item.original_operation,
+            "symbol": item.original_symbol,
+            "reason": dl.reason if dl else None,
+            "decision_time": _format_timestamp(dl.decision_time) if dl else None,
+            "realized_pnl": _decimal_to_float(dl.realized_pnl) if dl else None,
+        })
+
+    return {
+        "task_id": task_id,
+        "task_name": task.name,
+        "items": result_items,
+    }
+
+
 @router.delete("/tasks/{task_id}")
 def delete_task(
     task_id: int,

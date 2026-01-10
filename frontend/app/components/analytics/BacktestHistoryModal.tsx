@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Loader2, RotateCcw, ChevronRight } from 'lucide-react'
+import { Loader2, RotateCcw, ChevronRight, Download } from 'lucide-react'
 import {
   BacktestTask,
   BacktestResultItem,
@@ -22,6 +22,8 @@ import {
   getBacktestTaskResults,
   getBacktestItemDetail,
   retryBacktestTask,
+  getBacktestTaskItems,
+  BacktestTaskItemForImport,
 } from '@/lib/api'
 
 dayjs.extend(utc)
@@ -31,6 +33,7 @@ interface BacktestHistoryModalProps {
   onOpenChange: (open: boolean) => void
   accountId: string
   initialTaskId?: number
+  onImportToWorkspace?: (items: BacktestTaskItemForImport[]) => void
 }
 
 export default function BacktestHistoryModal({
@@ -38,6 +41,7 @@ export default function BacktestHistoryModal({
   onOpenChange,
   accountId,
   initialTaskId,
+  onImportToWorkspace,
 }: BacktestHistoryModalProps) {
   const { t } = useTranslation()
 
@@ -51,6 +55,7 @@ export default function BacktestHistoryModal({
   const [loadingResults, setLoadingResults] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const formatTime = (time: string | null) => time ? dayjs.utc(time).local().format('MM-DD HH:mm') : '-'
   const getOperationColor = (op: string | null): 'default' | 'secondary' | 'destructive' =>
@@ -137,6 +142,20 @@ export default function BacktestHistoryModal({
     }
   }
 
+  const handleImport = async () => {
+    if (!selectedTask || !onImportToWorkspace) return
+    setImporting(true)
+    try {
+      const data = await getBacktestTaskItems(selectedTask.id)
+      onImportToWorkspace(data.items)
+      onOpenChange(false)  // Close modal after import
+    } catch (error) {
+      console.error('Failed to import:', error)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   useEffect(() => {
     if (open) fetchTasks()
   }, [open, fetchTasks])
@@ -197,7 +216,25 @@ export default function BacktestHistoryModal({
           </div>
           {/* Middle: Results */}
           <div className="flex-1 border-r flex flex-col min-w-0">
-            <div className="p-3 border-b text-sm font-medium">{t('promptBacktest.results', 'Results')}</div>
+            <div className="p-3 border-b text-sm font-medium flex items-center justify-between">
+              <span>{t('promptBacktest.results', 'Results')}</span>
+              {selectedTask && selectedTask.status === 'completed' && onImportToWorkspace && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={handleImport}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <Download className="h-3 w-3 mr-1" />
+                  )}
+                  {t('promptBacktest.importToWorkspace', 'Import')}
+                </Button>
+              )}
+            </div>
             <ScrollArea className="flex-1">
               <div className="p-3">
                 {!selectedTask ? (

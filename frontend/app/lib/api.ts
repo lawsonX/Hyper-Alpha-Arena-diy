@@ -1239,3 +1239,22 @@ export async function retryBacktestTask(taskId: number) {
     retry_count: number
   }>
 }
+
+export interface BacktestTaskItemForImport {
+  id: number
+  modified_prompt: string
+  operation: string | null
+  symbol: string | null
+  reason: string | null
+  decision_time: string | null
+  realized_pnl: number | null
+}
+
+export async function getBacktestTaskItems(taskId: number) {
+  const response = await apiRequest(`/prompt-backtest/tasks/${taskId}/items`)
+  return response.json() as Promise<{
+    task_id: number
+    task_name: string
+    items: BacktestTaskItemForImport[]
+  }>
+}

@@ -131,7 +131,7 @@ def get_indicator_value(
             return data.get("current") if data else None
         elif indicator_upper == "FUNDING":
             data = _get_funding_data(db, symbol, period, interval_ms, current_time_ms)
-            return data.get("current") if data else None
+            return data.get("change") if data else None  # Return change in bps
         elif indicator_upper == "PRICE_CHANGE":
             data = _get_price_change_data(db, symbol, period, interval_ms, current_time_ms)
             return data.get("current") if data else None
@@ -347,16 +347,19 @@ def _get_oi_data(
     db: Session, symbol: str, period: str, interval_ms: int, current_time_ms: int
 ) -> Optional[Dict[str, Any]]:
     """
-    Get Open Interest absolute value data.
+    Get Open Interest USD change data.
 
-    Returns current OI and last 5 values.
+    OI change measures the absolute USD value change in open interest over the period.
+    Formula: (current_OI - previous_OI) × mark_price
+    Returns current change and last 5 change values (in USD, can be positive or negative).
     """
     lookback_ms = interval_ms * 10
     start_time = current_time_ms - lookback_ms
 
     records = db.query(
         MarketAssetMetrics.timestamp,
-        MarketAssetMetrics.open_interest
+        MarketAssetMetrics.open_interest,
+        MarketAssetMetrics.mark_price
     ).filter(
         MarketAssetMetrics.symbol == symbol.upper(),
         MarketAssetMetrics.timestamp >= start_time,
@@ -364,47 +367,39 @@ def _get_oi_data(
     ).order_by(MarketAssetMetrics.timestamp).all()
 
     if not records:
-        from datetime import datetime
-        logger.warning(
-            f"OI insufficient data: symbol={symbol}, period={period}, "
-            f"query_range=[{datetime.utcfromtimestamp(start_time/1000)} - "
-            f"{datetime.utcfromtimestamp(current_time_ms/1000)}], records_found=0"
-        )
+        logger.warning(f"OI insufficient data: symbol={symbol}, period={period}, records_found=0")
         return None
 
     # Aggregate by period - take last value in each bucket
     buckets = {}
-    for ts, oi in records:
+    for ts, oi, price in records:
         bucket_ts = floor_timestamp(ts, interval_ms)
-        buckets[bucket_ts] = oi
+        buckets[bucket_ts] = (oi, price)
 
     sorted_times = sorted(buckets.keys())
-    if not sorted_times:
-        from datetime import datetime
-        logger.warning(
-            f"OI insufficient data: symbol={symbol}, period={period}, "
-            f"records_found={len(records)}, buckets=0"
-        )
+    if len(sorted_times) < 2:
+        logger.warning(f"OI insufficient data: symbol={symbol}, buckets={len(sorted_times)}, need_min=2")
         return None
 
-    # Get OI values
-    oi_values = [decimal_to_float(buckets[ts]) for ts in sorted_times]
-    oi_values = [v for v in oi_values if v is not None]
+    # Calculate OI USD changes: (current_OI - previous_OI) × mark_price
+    oi_changes = []
+    for i in range(1, len(sorted_times)):
+        curr_oi, curr_price = buckets[sorted_times[i]]
+        prev_oi, _ = buckets[sorted_times[i-1]]
+        if curr_oi and prev_oi and curr_price:
+            curr_oi_f = decimal_to_float(curr_oi)
+            prev_oi_f = decimal_to_float(prev_oi)
+            price_f = decimal_to_float(curr_price)
+            change_usd = (curr_oi_f - prev_oi_f) * price_f
+            oi_changes.append(round(change_usd, 2))
 
-    if not oi_values:
-        from datetime import datetime
-        logger.warning(
-            f"OI insufficient data: symbol={symbol}, period={period}, "
-            f"records_found={len(records)}, buckets={len(sorted_times)}, valid_values=0"
-        )
+    if not oi_changes:
+        logger.warning(f"OI insufficient data: symbol={symbol}, valid_changes=0")
         return None
-
-    current_oi = oi_values[-1]
-    last_5 = oi_values[-5:] if len(oi_values) >= 5 else oi_values
 
     return {
-        "current": current_oi,
-        "last_5": last_5,
+        "current": oi_changes[-1],
+        "last_5": oi_changes[-5:] if len(oi_changes) >= 5 else oi_changes,
         "period": period
     }
 
@@ -512,26 +507,42 @@ def _get_funding_data(
     if not sorted_times:
         return None
 
-    # Get funding rate values (convert to percentage)
+    # Get funding rate values aligned with K-line chart display
+    # Database stores decimal form (e.g., 0.0000125)
+    # K-line chart: raw × 100 (to %) × 10000 = raw × 1000000 for display
+    # This gives values like 12.5 when raw is 0.0000125
     funding_values = []
     for ts in sorted_times:
         fr = buckets[ts]
         if fr is not None:
-            funding_values.append(float(fr) * 100)  # Convert to percentage
+            funding_values.append(float(fr) * 1000000)  # Align with K-line display
 
     if not funding_values:
         return None
 
-    current_funding = funding_values[-1]
+    current_val = funding_values[-1]
+    # Convert back to percentage for display: val / 10000 = percentage
+    current_pct = current_val / 10000
+
+    # Calculate change from previous period
+    if len(funding_values) >= 2:
+        change_val = current_val - funding_values[-2]
+    else:
+        change_val = 0.0
+    change_pct = change_val / 10000
+
     last_5 = funding_values[-5:] if len(funding_values) >= 5 else funding_values
 
     # Calculate annualized rate (assuming 8-hour funding periods, 3 per day)
-    annualized = current_funding * 3 * 365
+    annualized = current_pct * 3 * 365
 
     return {
-        "current": current_funding,
-        "last_5": last_5,
-        "annualized": annualized,
+        "current": current_val,        # Current rate (K-line display unit)
+        "current_pct": current_pct,    # Current rate in percentage
+        "change": change_val,          # Change from previous period (K-line display unit)
+        "change_pct": change_pct,      # Change in percentage
+        "last_5": last_5,              # Last 5 values (K-line display unit)
+        "annualized": annualized,      # Annualized rate in percentage
         "period": period
     }
 

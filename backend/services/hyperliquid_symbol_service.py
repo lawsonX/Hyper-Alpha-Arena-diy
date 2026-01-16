@@ -123,11 +123,17 @@ def fetch_remote_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
 
     results: List[Dict[str, str]] = []
     seen = set()
-    invalid_count = 0
+    delisted_count = 0
 
     for entry in universe:
         if not isinstance(entry, dict):
             continue
+
+        # Skip delisted symbols using Meta API field directly
+        if entry.get("isDelisted"):
+            delisted_count += 1
+            continue
+
         raw_symbol = entry.get("name") or entry.get("symbol")
         if not raw_symbol:
             continue
@@ -135,12 +141,6 @@ def fetch_remote_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
         if symbol in seen:
             continue
         seen.add(symbol)
-
-        # Validate symbol is actually tradable
-        if not _validate_symbol_tradability(symbol, environment):
-            logger.debug(f"Skipping symbol {symbol} (not tradable on Hyperliquid)")
-            invalid_count += 1
-            continue
 
         results.append(
             {
@@ -150,8 +150,8 @@ def fetch_remote_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
             }
         )
 
-    if invalid_count > 0:
-        logger.info(f"Filtered out {invalid_count} delisted/non-tradable symbols during Hyperliquid symbol refresh")
+    if delisted_count > 0:
+        logger.info(f"Filtered out {delisted_count} delisted symbols during Hyperliquid symbol refresh")
 
     return results
 

@@ -75,11 +75,25 @@ class HyperliquidClient:
             # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
             formatted_symbol = self._format_symbol(symbol)
 
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
-            price = ticker['last']
-
-            logger.info(f"Got price for {formatted_symbol}: {price}")
-            return float(price) if price else None
+            try:
+                ticker = self.exchange.fetch_ticker(formatted_symbol)
+                price = ticker['last']
+                logger.info(f"Got price for {formatted_symbol}: {price}")
+                return float(price) if price else None
+            except Exception as perp_error:
+                # If perpetual format fails, try spot format as fallback
+                error_msg = str(perp_error).lower()
+                if 'does not have market symbol' in error_msg or 'bad symbol' in error_msg:
+                    # Try spot format (remove :USDC suffix)
+                    if ':USDC' in formatted_symbol:
+                        spot_symbol = formatted_symbol.replace(':USDC', '')
+                        logger.debug(f"Perpetual format failed for {symbol}, retrying with spot format: {spot_symbol}")
+                        ticker = self.exchange.fetch_ticker(spot_symbol)
+                        price = ticker['last']
+                        logger.info(f"Got price for {spot_symbol}: {price}")
+                        return float(price) if price else None
+                # Re-raise if not a symbol format issue
+                raise
 
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
@@ -170,7 +184,20 @@ class HyperliquidClient:
                 self._initialize_exchange()
 
             formatted_symbol = self._format_symbol(symbol)
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
+
+            try:
+                ticker = self.exchange.fetch_ticker(formatted_symbol)
+            except Exception as perp_error:
+                error_msg = str(perp_error).lower()
+                if 'does not have market symbol' in error_msg or 'bad symbol' in error_msg:
+                    if ':USDC' in formatted_symbol:
+                        spot_symbol = formatted_symbol.replace(':USDC', '')
+                        logger.debug(f"Perpetual format failed for {symbol}, retrying with spot format: {spot_symbol}")
+                        ticker = self.exchange.fetch_ticker(spot_symbol)
+                    else:
+                        raise
+                else:
+                    raise
 
             result = {
                 'symbol': symbol,
@@ -199,8 +226,21 @@ class HyperliquidClient:
                 self._initialize_exchange()
 
             formatted_symbol = self._format_symbol(symbol)
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
-            price = ticker['last']
+
+            try:
+                ticker = self.exchange.fetch_ticker(formatted_symbol)
+                price = ticker['last']
+            except Exception as perp_error:
+                error_msg = str(perp_error).lower()
+                if 'does not have market symbol' in error_msg or 'bad symbol' in error_msg:
+                    if ':USDC' in formatted_symbol:
+                        spot_symbol = formatted_symbol.replace(':USDC', '')
+                        ticker = self.exchange.fetch_ticker(spot_symbol)
+                        price = ticker['last']
+                    else:
+                        return False
+                else:
+                    return False
 
             is_valid = price is not None and price > 0
             if is_valid:
@@ -238,8 +278,21 @@ class HyperliquidClient:
             }
             timeframe = timeframe_map.get(period, '1d')
 
-            # Fetch OHLCV data
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, limit=count)
+            # Fetch OHLCV data with fallback to spot format
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, limit=count)
+            except Exception as perp_error:
+                error_msg = str(perp_error).lower()
+                if 'does not have market symbol' in error_msg or 'bad symbol' in error_msg:
+                    if ':USDC' in formatted_symbol:
+                        spot_symbol = formatted_symbol.replace(':USDC', '')
+                        logger.debug(f"Perpetual format failed for {symbol}, retrying with spot format: {spot_symbol}")
+                        ohlcv = self.exchange.fetch_ohlcv(spot_symbol, timeframe, limit=count)
+                        formatted_symbol = spot_symbol  # Update for logging
+                    else:
+                        raise
+                else:
+                    raise
 
             # Convert to our format
             klines = []
@@ -321,8 +374,21 @@ class HyperliquidClient:
             else:
                 limit = 500
 
-            # Fetch OHLCV data with since parameter
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since_ms, limit=limit)
+            # Fetch OHLCV data with since parameter and fallback to spot format
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, since=since_ms, limit=limit)
+            except Exception as perp_error:
+                error_msg = str(perp_error).lower()
+                if 'does not have market symbol' in error_msg or 'bad symbol' in error_msg:
+                    if ':USDC' in formatted_symbol:
+                        spot_symbol = formatted_symbol.replace(':USDC', '')
+                        logger.debug(f"Perpetual format failed for {symbol}, retrying with spot format: {spot_symbol}")
+                        ohlcv = self.exchange.fetch_ohlcv(spot_symbol, timeframe, since=since_ms, limit=limit)
+                        formatted_symbol = spot_symbol
+                    else:
+                        raise
+                else:
+                    raise
 
             # Convert to our format and filter by until_ms if provided
             klines = []
@@ -465,7 +531,11 @@ class HyperliquidClient:
             return ['BTC/USD', 'ETH/USD', 'SOL/USD']  # Fallback popular pairs
 
     def _format_symbol(self, symbol: str) -> str:
-        """Format symbol for CCXT (e.g., 'BTC' -> 'BTC/USDC:USDC')"""
+        """Format symbol for CCXT (e.g., 'BTC' -> 'BTC/USDC:USDC')
+
+        Hyperliquid primarily uses perpetual swap format for most trading pairs.
+        Default to perpetual format, with fallback to spot in calling functions.
+        """
         if '/' in symbol and ':' in symbol:
             return symbol
         elif '/' in symbol:
@@ -477,16 +547,9 @@ class HyperliquidClient:
         if symbol_clean.endswith('-PERP'):
             symbol_clean = symbol_clean[:-5]
 
-        # For single symbols like 'BTC', check if it's a mainstream crypto
+        # Default to perpetual swap format (most common on Hyperliquid)
         symbol_upper = symbol_clean
-        mainstream_cryptos = ['BTC', 'ETH', 'SOL', 'DOGE', 'BNB', 'XRP']
-        
-        if symbol_upper in mainstream_cryptos:
-            # Use perpetual swap format for mainstream cryptos
-            return f"{symbol_upper}/USDC:USDC"
-        else:
-            # Use spot format for other cryptos
-            return f"{symbol_upper}/USDC"
+        return f"{symbol_upper}/USDC:USDC"
 
 
 # Client factory functions

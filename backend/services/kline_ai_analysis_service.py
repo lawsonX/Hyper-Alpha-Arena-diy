@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from database.models import Account, KlineAIAnalysisLog
 from config.prompt_templates import KLINE_ANALYSIS_PROMPT_TEMPLATE
-from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message
+from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message, get_max_tokens
 from services.market_flow_indicators import get_flow_indicators_for_prompt
 
 
@@ -472,10 +472,11 @@ def analyze_kline_chart(
         if not is_reasoning_model:
             payload["temperature"] = 0.7
 
+        max_tokens_value = get_max_tokens(account.model)
         if is_new_model:
-            payload["max_completion_tokens"] = 4000
+            payload["max_completion_tokens"] = max_tokens_value
         else:
-            payload["max_tokens"] = 4000
+            payload["max_tokens"] = max_tokens_value
 
         # Call AI API
         endpoints = build_chat_completion_endpoints(account.base_url, account.model)

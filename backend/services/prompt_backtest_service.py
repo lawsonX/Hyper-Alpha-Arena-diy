@@ -254,7 +254,7 @@ def _call_llm_with_config(
 
     Returns full API response dict for reasoning extraction, or None on failure.
     """
-    from services.ai_decision_service import build_chat_completion_endpoints
+    from services.ai_decision_service import build_chat_completion_endpoints, get_max_tokens
 
     headers = {
         "Content-Type": "application/json",
@@ -288,10 +288,11 @@ def _call_llm_with_config(
     if not is_reasoning_model:
         payload["temperature"] = 0.7
 
+    max_tokens_value = get_max_tokens(model)
     if is_new_model:
-        payload["max_completion_tokens"] = 5000
+        payload["max_completion_tokens"] = max_tokens_value
     else:
-        payload["max_tokens"] = 5000
+        payload["max_tokens"] = max_tokens_value
 
     endpoints = build_chat_completion_endpoints(config.get("base_url", ""), model)
     if not endpoints:

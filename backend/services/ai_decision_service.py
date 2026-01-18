@@ -87,6 +87,67 @@ def _get_metric_unit(metric: str) -> str:
     return ""
 
 
+def get_max_tokens(model: str) -> int:
+    """
+    Get recommended max_tokens value based on model name.
+
+    Different models have different max output token limits:
+    - GPT-4-turbo: 4096 (needs special handling)
+    - GPT-4o/4o-mini: 16384 (use 8000 for cost balance)
+    - o1/o1-mini: 65536-100000 (use 12000-16000)
+    - Claude: 64000 (use 12000 for cost balance)
+    - Deepseek-chat: 8000
+    - Deepseek-reasoner: 64000 (use 16000)
+    - Qwen: 8000-65536 (use 8000-16000)
+
+    Args:
+        model: Model name (e.g., "gpt-4-turbo", "claude-3-5-sonnet-20241022")
+
+    Returns:
+        Recommended max_tokens value (fallback: 4000 for unknown models)
+    """
+    model_lower = model.lower()
+
+    # Special case: GPT-4-turbo has max output limit of 4096
+    if 'gpt-4-turbo' in model_lower:
+        return 4000
+
+    # GPT-4.1 (ultra-large context model)
+    if 'gpt-4.1' in model_lower:
+        return 16000
+
+    # Reasoning models (need more output tokens)
+    if 'deepseek-reasoner' in model_lower:
+        return 16000
+
+    # o1 series (note order: check o1-mini first, then o1)
+    if 'o1-mini' in model_lower:
+        return 12000
+    if 'o1' in model_lower:
+        return 16000
+
+    # GPT-4o series
+    if 'gpt-4o' in model_lower:
+        return 8000
+
+    # Claude series
+    if 'claude' in model_lower:
+        return 12000
+
+    # Qwen series (note order: check qwen3 first, then qwen)
+    if 'qwen3' in model_lower:
+        return 16000
+    if 'qwen' in model_lower:
+        return 8000
+
+    # Deepseek-chat
+    if 'deepseek' in model_lower:
+        return 8000
+
+    # Fallback for unknown models (conservative safe value)
+    return 4000
+
+
 def _build_session_context(account: Account) -> str:
     """Build session context (legacy format for backward compatibility)"""
     now = datetime.utcnow()
@@ -1171,13 +1232,40 @@ def _get_portfolio_data(db: Session, account: Account) -> Dict:
     }
 
 
+def detect_api_format(base_url: str) -> tuple:
+    """Detect API format from URL and return (endpoint, format_type).
+
+    Returns:
+        tuple: (endpoint_url, format_type) where format_type is 'openai' or 'anthropic'
+    """
+    if not base_url:
+        return (None, None)
+
+    normalized = base_url.strip().rstrip('/')
+    if not normalized:
+        return (None, None)
+
+    base_lower = normalized.lower()
+
+    # Check if URL already ends with a complete endpoint
+    if base_lower.endswith('/messages'):
+        # Anthropic native format
+        return (normalized, 'anthropic')
+    elif base_lower.endswith('/chat/completions'):
+        # OpenAI format, already complete
+        return (normalized, 'openai')
+    else:
+        # No specific endpoint, append /chat/completions (default OpenAI format)
+        return (f"{normalized}/chat/completions", 'openai')
+
+
 def build_chat_completion_endpoints(base_url: str, model: Optional[str] = None) -> List[str]:
     """Build a list of possible chat completion endpoints for an OpenAI-compatible API.
 
     Supports Deepseek-specific behavior where both `/chat/completions` and `/v1/chat/completions`
     might be valid, depending on how the base URL is configured.
     Returns:
-        List of decision dictionaries (one per symbol action) or None if generation failed.
+        List of endpoint URLs to try.
     """
     if not base_url:
         return []
@@ -1186,14 +1274,24 @@ def build_chat_completion_endpoints(base_url: str, model: Optional[str] = None) 
     if not normalized:
         return []
 
-    endpoints: List[str] = []
     base_lower = normalized.lower()
+
+    # Check if URL already ends with a complete endpoint
+    if base_lower.endswith('/messages'):
+        # Anthropic native format - use as-is
+        return [normalized]
+    elif base_lower.endswith('/chat/completions'):
+        # OpenAI format, already complete - use as-is
+        return [normalized]
+
+    # No specific endpoint, build OpenAI-compatible endpoints
+    endpoints: List[str] = []
     endpoints.append(f"{normalized}/chat/completions")
 
     is_deepseek = "deepseek.com" in base_lower
 
     if is_deepseek:
-        # Deepseek 官方同时支持 https://api.deepseek.com/chat/completions 和 /v1/chat/completions。
+        # Deepseek supports both /chat/completions and /v1/chat/completions
         if base_lower.endswith('/v1'):
             without_v1 = normalized[:-3]
             endpoints.append(f"{without_v1}/chat/completions")
@@ -1423,13 +1521,14 @@ def call_ai_for_decision(
 
     # Use max_completion_tokens for newer models
     # Use max_tokens for older models (GPT-3.5, GPT-4, GPT-4-turbo, Deepseek)
-    # Modern models have large context windows, allocate generous token budgets
+    # Get model-specific max_tokens value based on model capabilities
+    max_tokens_value = get_max_tokens(account.model)
     if is_new_model:
-        # Reasoning models (GPT-5/o1) need more tokens for internal reasoning
-        payload["max_completion_tokens"] = 5000
+        # Newer models use max_completion_tokens parameter
+        payload["max_completion_tokens"] = max_tokens_value
     else:
-        # Regular models (GPT-4, Deepseek, Claude, etc.)
-        payload["max_tokens"] = 5000
+        # Older models use max_tokens parameter
+        payload["max_tokens"] = max_tokens_value
 
     # For GPT-5 family set reasoning_effort to balance latency and quality
     if "gpt-5" in model_lower:
@@ -1877,6 +1976,8 @@ def save_ai_decision(
     hyperliquid_order_id: Optional[str] = None,
     tp_order_id: Optional[str] = None,
     sl_order_id: Optional[str] = None,
+    # Decision source type: "prompt_template" (AI Trader) or "program" (Program Trader)
+    decision_source_type: str = "prompt_template",
 ) -> None:
     """Save AI decision to the decision log"""
     try:
@@ -1951,6 +2052,8 @@ def save_ai_decision(
             hyperliquid_order_id=hyperliquid_order_id,
             tp_order_id=tp_order_id,
             sl_order_id=sl_order_id,
+            # Decision source type for attribution
+            decision_source_type=decision_source_type,
         )
 
         db.add(decision_log)

@@ -248,38 +248,62 @@ class MarketFlowCollector:
         for symbol in new - current:
             self._subscribe_symbol(symbol)
 
+    def _get_original_coin_name(self, symbol: str) -> str:
+        """Get the original coin name from Hyperliquid SDK (case-sensitive).
+
+        Hyperliquid uses mixed-case names like 'kSHIB', 'kPEPE', but our watchlist
+        stores uppercase versions. This method finds the original name.
+        """
+        if not self.info:
+            return symbol
+
+        # Try exact match first
+        if symbol in self.info.name_to_coin:
+            return symbol
+
+        # Try case-insensitive match
+        symbol_upper = symbol.upper()
+        for coin in self.info.name_to_coin:
+            if coin.upper() == symbol_upper:
+                return coin
+
+        return symbol
+
     def _subscribe_symbol(self, symbol: str):
         """Subscribe to all data streams for a symbol"""
         if not self.info:
             return
 
+        # Convert to original Hyperliquid coin name (e.g., KSHIB -> kSHIB)
+        coin = self._get_original_coin_name(symbol)
+
         try:
-            # Initialize buffer
+            # Initialize buffer (use original symbol for internal tracking)
             self.trade_buffers[symbol] = TradeBuffer()
 
             # Subscribe to trades
             trades_id = self.info.subscribe(
-                {"type": "trades", "coin": symbol},
+                {"type": "trades", "coin": coin},
                 lambda msg, s=symbol: self._on_trades(s, msg)
             )
             self.subscription_ids[symbol]["trades"] = trades_id
 
             # Subscribe to L2 orderbook
             l2_id = self.info.subscribe(
-                {"type": "l2Book", "coin": symbol},
+                {"type": "l2Book", "coin": coin},
                 lambda msg, s=symbol: self._on_l2book(s, msg)
             )
             self.subscription_ids[symbol]["l2Book"] = l2_id
 
             # Subscribe to asset context (OI, funding, etc.)
             ctx_id = self.info.subscribe(
-                {"type": "activeAssetCtx", "coin": symbol},
+                {"type": "activeAssetCtx", "coin": coin},
                 lambda msg, s=symbol: self._on_asset_ctx(s, msg)
             )
             self.subscription_ids[symbol]["activeAssetCtx"] = ctx_id
 
             self.subscribed_symbols.append(symbol)
-            logger.info(f"Subscribed to market flow data for {symbol}")
+            logger.info(f"Subscribed to market flow data for {symbol} (coin: {coin})")
 
         except Exception as e:
             logger.error(f"Failed to subscribe {symbol}: {e}")
@@ -289,15 +313,18 @@ class MarketFlowCollector:
         if not self.info or symbol not in self.subscription_ids:
             return
 
+        # Convert to original Hyperliquid coin name
+        coin = self._get_original_coin_name(symbol)
+
         try:
             ids = self.subscription_ids[symbol]
 
             if "trades" in ids:
-                self.info.unsubscribe({"type": "trades", "coin": symbol}, ids["trades"])
+                self.info.unsubscribe({"type": "trades", "coin": coin}, ids["trades"])
             if "l2Book" in ids:
-                self.info.unsubscribe({"type": "l2Book", "coin": symbol}, ids["l2Book"])
+                self.info.unsubscribe({"type": "l2Book", "coin": coin}, ids["l2Book"])
             if "activeAssetCtx" in ids:
-                self.info.unsubscribe({"type": "activeAssetCtx", "coin": symbol}, ids["activeAssetCtx"])
+                self.info.unsubscribe({"type": "activeAssetCtx", "coin": coin}, ids["activeAssetCtx"])
 
             del self.subscription_ids[symbol]
             if symbol in self.subscribed_symbols:

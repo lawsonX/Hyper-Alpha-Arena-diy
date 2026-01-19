@@ -11,7 +11,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from database.models import Account, AiPromptConversation, AiPromptMessage
-from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message
+from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message, get_max_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ def generate_prompt_with_ai(
             "model": account.model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 4096,
+            "max_tokens": get_max_tokens(account.model),
         }
 
         headers = {

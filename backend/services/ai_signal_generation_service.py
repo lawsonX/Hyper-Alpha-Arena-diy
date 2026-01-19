@@ -16,7 +16,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from database.models import AiSignalConversation, AiSignalMessage, Account
-from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message
+from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message, get_max_tokens
 from services.signal_backtest_service import signal_backtest_service, TIMEFRAME_MS
 from services.system_logger import system_logger
 
@@ -332,7 +332,7 @@ def generate_signal_with_ai(
                 "model": account.model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 4096,
+                "max_tokens": get_max_tokens(account.model),
             }
 
             # On last round, force model to give final answer without tools
@@ -1366,7 +1366,7 @@ def generate_signal_with_ai_stream(
                 "model": account.model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 4096,
+                "max_tokens": get_max_tokens(account.model),
             }
 
             if is_last_round:

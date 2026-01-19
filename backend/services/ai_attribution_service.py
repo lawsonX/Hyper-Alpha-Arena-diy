@@ -23,7 +23,7 @@ from database.models import (
 )
 from database.snapshot_connection import SnapshotSessionLocal
 from database.snapshot_models import HyperliquidTrade
-from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message
+from services.ai_decision_service import build_chat_completion_endpoints, _extract_text_from_message, get_max_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -717,7 +717,7 @@ def generate_attribution_analysis_stream(
                 "model": account.model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 4096,
+                "max_tokens": get_max_tokens(account.model),
             }
 
             if is_last:
